@@ -9,6 +9,10 @@ import datetime
 # Path for saving coordinates of artificial devices
 COORDINATES_CSV = "data/device_data/artificial_device_coordinates.csv"
 
+# Path for saving marked areas of the streamlit folium polygon
+POLYGON_COORDINATES_CSV = "data/areas/user_drawn_area_cities"
+
+
 # Ensure directory exists
 os.makedirs(os.path.dirname(COORDINATES_CSV), exist_ok=True)
 

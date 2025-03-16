@@ -36,7 +36,5 @@ db = DatabaseManager(
 # Get jaguar data
 def get_jaguar_data():
     jaguar_data = db.load_dataframe("SELECT * FROM public.jaguar_rescue")
-    print(jaguar_data)
     return jaguar_data
 
-get_jaguar_data()
