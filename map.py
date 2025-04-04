@@ -7,6 +7,7 @@ import os
 import datetime
 import json
 import uuid
+import base64
 
 # Path for saving coordinates of artificial devices
 COORDINATES_CSV = "data/device_data/artificial_device_coordinates.csv"
@@ -30,6 +31,91 @@ if not os.path.exists(POLYGON_COORDINATES_CSV):
 
 # Add a title
 st.title("Interactive Bear Deterrent Mapping System")
+
+# Image helper functions
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def get_image_files(directory_path):
+    """Cache the listing of image files in a directory"""
+    if not os.path.exists(directory_path):
+        return []
+    
+    return [f for f in os.listdir(directory_path) 
+            if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def format_device_id(raw_device_id):
+    """Format device ID with consistent padding"""
+    if isinstance(raw_device_id, (int, float)):
+        # It's a number - format with leading zeros (6 digits)
+        return f"{int(raw_device_id):06d}"
+    else:
+        # It's already a string
+        device_id = str(raw_device_id)
+        # If it's a numeric string but missing leading zeros, add them
+        if device_id.isdigit() and len(device_id) < 6:
+            return device_id.zfill(6)
+        return device_id
+
+# Function for displaying images in the sidebar
+def display_device_images_in_sidebar(deterrent_data):
+    """Display images for a selected device in the sidebar"""
+    st.sidebar.header("View Deterrent Images")
+    
+    # Get device IDs for selection
+    device_ids = []
+    for _, row in deterrent_data.iterrows():
+        raw_id = row['Directory name']
+        formatted_id = format_device_id(raw_id)
+        device_ids.append(formatted_id)
+    
+    # Add a select box to choose a device
+    selected_device = st.sidebar.selectbox("Select Deterrent ID", options=device_ids)
+    
+    if selected_device:
+        # Device images
+        device_path = f"data/bear_pictures/{selected_device}/device/"
+        device_images = get_image_files(device_path)
+        
+        # Trail images
+        trail_path = f"data/bear_pictures/{selected_device}/trail_processed/"
+        trail_images = get_image_files(trail_path)
+        
+        # Display counts and load buttons
+        col1, col2 = st.sidebar.columns(2)
+        
+        with col1:
+            st.button("Load Device Images", 
+                      key="load_device", 
+                      help=f"{len(device_images)} device images available",
+                      use_container_width=True)
+            
+        with col2:
+            st.button("Load Trail Images", 
+                      key="load_trail", 
+                      help=f"{len(trail_images)} trail images available",
+                      use_container_width=True)
+        
+        # Display device images if that button was clicked
+        if st.session_state.get("load_device", False):
+            st.sidebar.subheader("Device Images")
+            if device_images:
+                st.sidebar.write(f"Found {len(device_images)} device images")
+                for img in device_images:
+                    img_path = os.path.join(device_path, img)
+                    st.sidebar.image(img_path, caption=img, use_container_width=True)
+            else:
+                st.sidebar.info("No device images found")
+        
+        # Display trail images if that button was clicked
+        if st.session_state.get("load_trail", False):
+            st.sidebar.subheader("Trail Images")
+            if trail_images:
+                st.sidebar.write(f"Found {len(trail_images)} trail images")
+                for img in trail_images:
+                    img_path = os.path.join(trail_path, img)
+                    st.sidebar.image(img_path, caption=img, use_container_width=True)
+            else:
+                st.sidebar.info("No trail images found")
 
 # Load all existing data
 def load_existing_data():
@@ -265,11 +351,43 @@ def create_map():
         opacity=0.7,
     ).add_to(m)
     
-    # Add existing deterrent devices
+    # Add existing deterrent devices with simple popups
     for _, row in deterrent_data.iterrows():
+        # Get the device ID
+        raw_device_id = row['Directory name']
+        device_id = format_device_id(raw_device_id)
+        
+        # Build paths to image directories
+        device_images_path = f"data/bear_pictures/{device_id}/device/"
+        trail_images_path = f"data/bear_pictures/{device_id}/trail_processed/"
+        
+        # Get image counts (not loading the actual images)
+        device_image_count = len(get_image_files(device_images_path))
+        trail_image_count = len(get_image_files(trail_images_path))
+        
+        # Create a simple popup with counts and ID info
+        popup_html = f"""
+        <div style="min-width: 200px; padding: 10px;">
+            <h3>Deterrent ID: {device_id}</h3>
+            <p>Location: {row['lat']:.6f}, {row['lng']:.6f}</p>
+            <p>Available images:</p>
+            <ul>
+                <li>Device Images: {device_image_count}</li>
+                <li>Trail Images: {trail_image_count}</li>
+            </ul>
+            <p><strong>Click "View Images" in the sidebar to see images for this device.</strong></p>
+        </div>
+        """
+        
+        # Create the popup with the HTML content
+        iframe = folium.IFrame(html=popup_html, width=250, height=200)
+        popup = folium.Popup(iframe, max_width=300)
+        
+        # Add marker with custom popup
         folium.Marker(
             [float(row['lat']), float(row['lng'])],
-            popup=f"Deterrent ID: {row['id']}",
+            popup=popup,
+            tooltip=f"Deterrent ID: {device_id}",
             icon=folium.Icon(color="red", icon="warning-sign")
         ).add_to(m)
     
@@ -365,20 +483,7 @@ def create_map():
     draw.add_to(m)
     
     # Make sure to add the layer control AFTER all layers are added
-    # Position it on the topleft to avoid getting cut off
-    folium.LayerControl(position='topleft', collapsed=False).add_to(m)
-    
-    # Add custom CSS to fix the layer control width and ensure it's not cut off
-    custom_css = """
-    <style>
-    .leaflet-control-layers {
-        max-width: none !important;
-        max-height: none !important;
-        overflow: visible !important;
-    }
-    </style>
-    """
-    m.get_root().html.add_child(folium.Element(custom_css))
+    folium.LayerControl(position='topright', collapsed=False).add_to(m)
     
     return m
 
@@ -395,6 +500,9 @@ with tab1:
     # Create the map
     m = create_map()
     map_data = st_folium(m, width=1000, height=500, key="folium_map")
+    
+    # Display images in sidebar
+    display_device_images_in_sidebar(deterrent_data)
 
     # Add buttons for saving and deleting all markers
     col1, col2 = st.columns([1, 1])
