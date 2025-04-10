@@ -14,6 +14,27 @@ import math
 # Path for Carpathian bears data
 CARPATHIAN_DATA_DIR = "data/animal_data/carpathian_bears"
 
+def display_folium_map_efficiently(map_figure):
+    """
+    Display a Folium map with optimized settings to prevent excessive reruns.
+    
+    Args:
+        map_figure: A Folium map object
+        
+    Returns:
+        The map data returned by st_folium
+    """
+    # Use a more compatible set of parameters
+    map_data = st_folium(
+        map_figure, 
+        width=1000,
+        height=600,
+        # Only include parameters that are supported in your version
+        returned_objects=["last_active_drawing"]
+    )
+    
+    return map_data
+
 def load_carpathian_data():
     """
     Load the processed Carpathian bears data.
@@ -584,7 +605,7 @@ def display_carpathian_bears_section():
                 show_by=show_by,
                 view_mode=view_mode
             )
-            st_folium(map_figure, width=1000, height=600)
+            map_data = display_folium_map_efficiently(map_figure)
         else:
             st.warning("No data found with the current filters. Please adjust your selection.")
     
