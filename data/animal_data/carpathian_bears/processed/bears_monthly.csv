@@ -1,0 +1,150 @@
+bear_id,year_month,num_points,num_days,most_common_season,sex,age
+Bear2,2013-05,384,17,Den exit and reproduction,M,J
+Bear2,2013-06,711,30,Forest fruits,M,J
+Bear2,2013-07,738,31,Forest fruits,M,J
+Bear2,2013-08,735,31,Forest fruits,M,J
+Bear2,2013-09,716,30,Hyperphagia,M,J
+Bear2,2013-10,740,31,Hyperphagia,M,J
+Bear2,2013-11,603,26,Hyperphagia,M,J
+Bear2,2013-12,209,9,Winter sleep,M,J
+Bear4,2013-06,240,11,Forest fruits,F,J
+Bear4,2013-07,733,31,Forest fruits,F,J
+Bear4,2013-08,721,31,Forest fruits,F,J
+Bear4,2013-09,687,30,Hyperphagia,F,J
+Bear4,2013-10,720,31,Hyperphagia,F,J
+Bear4,2013-11,698,30,Winter sleep,F,J
+Bear4,2013-12,691,31,Winter sleep,F,J
+Bear4,2014-01,704,31,Winter sleep,F,J
+Bear4,2014-02,547,28,Winter sleep,F,J
+Bear4,2014-03,728,31,Winter sleep,F,J
+Bear4,2014-04,704,30,Den exit and reproduction,F,J
+Bear4,2014-05,724,31,Den exit and reproduction,F,J
+Bear4,2014-06,516,23,Den exit and reproduction,F,J
+Bear5,2011-08,382,23,Forest fruits,M,A
+Bear5,2011-09,608,30,Hyperphagia,M,A
+Bear5,2011-10,535,31,Hyperphagia,M,A
+Bear5,2011-11,553,30,Winter sleep,M,A
+Bear5,2011-12,331,20,Winter sleep,M,A
+Bear5,2012-01,161,11,Winter sleep,M,A
+Bear5,2012-02,271,18,Winter sleep,M,A
+Bear5,2012-03,420,22,Winter sleep,M,A
+Bear5,2012-04,214,15,Den exit and reproduction,M,A
+Bear5,2012-05,446,31,Den exit and reproduction,M,A
+Bear5,2012-06,48,4,Den exit and reproduction,M,A
+Bear6,2011-09,540,24,Hyperphagia,M,A
+Bear6,2011-10,722,31,Hyperphagia,M,A
+Bear6,2011-11,688,30,Winter sleep,M,A
+Bear6,2011-12,690,31,Winter sleep,M,A
+Bear6,2012-01,630,31,Winter sleep,M,A
+Bear6,2012-02,508,29,Winter sleep,M,A
+Bear6,2012-03,660,31,Winter sleep,M,A
+Bear6,2012-04,699,30,Den exit and reproduction,M,A
+Bear6,2012-05,720,31,Den exit and reproduction,M,A
+Bear6,2012-06,701,30,Forest fruits,M,A
+Bear6,2012-07,716,31,Forest fruits,M,A
+Bear6,2012-08,696,31,Forest fruits,M,A
+Bear6,2012-09,422,19,Hyperphagia,M,A
+Bear8,2012-08,267,12,Forest fruits,F,A
+Bear8,2012-09,715,30,Hyperphagia,F,A
+Bear8,2012-10,740,31,Hyperphagia,F,A
+Bear8,2012-11,498,28,Hyperphagia,F,A
+Bear8,2012-12,10,7,Winter sleep,F,A
+Bear8,2013-01,2,1,Winter sleep,F,A
+Bear8,2013-04,370,28,Den exit and reproduction,F,A
+Bear8,2013-05,739,31,Den exit and reproduction,F,A
+Bear8,2013-06,716,30,Forest fruits,F,A
+Bear8,2013-07,726,31,Forest fruits,F,A
+Bear8,2013-08,724,31,Forest fruits,F,A
+Bear8,2013-09,709,30,Hyperphagia,F,A
+Bear8,2013-10,742,31,Hyperphagia,F,A
+Bear8,2013-11,676,30,Winter sleep,F,A
+Bear8,2013-12,528,31,Winter sleep,F,A
+Bear8,2014-01,645,31,Winter sleep,F,A
+Bear8,2014-02,651,28,Winter sleep,F,A
+Bear8,2014-03,740,31,Winter sleep,F,A
+Bear8,2014-04,718,30,Den exit and reproduction,F,A
+Bear8,2014-05,738,31,Den exit and reproduction,F,A
+Bear8,2014-06,659,28,Den exit and reproduction,F,A
+Bear10,2012-08,216,10,Forest fruits,M,A
+Bear10,2012-09,660,30,Hyperphagia,M,A
+Bear10,2012-10,680,31,Hyperphagia,M,A
+Bear10,2012-11,664,30,Winter sleep,M,A
+Bear10,2012-12,408,31,Winter sleep,M,A
+Bear10,2013-01,74,15,Winter sleep,M,A
+Bear10,2013-02,142,13,Winter sleep,M,A
+Bear10,2013-03,679,31,Winter sleep,M,A
+Bear10,2013-04,653,30,Den exit and reproduction,M,A
+Bear10,2013-05,633,31,Den exit and reproduction,M,A
+Bear10,2013-06,591,30,Forest fruits,M,A
+Bear10,2013-07,246,12,Forest fruits,M,A
+Bear12,2013-07,616,27,Forest fruits,M,A
+Bear12,2013-08,705,31,Forest fruits,M,A
+Bear12,2013-09,464,21,Hyperphagia,M,A
+Bear12,2013-10,75,4,Hyperphagia,M,A
+Bear12,2014-02,100,5,Winter sleep,M,A
+Bear12,2014-03,700,31,Winter sleep,M,A
+Bear12,2014-04,710,30,Den exit and reproduction,M,A
+Bear12,2014-05,740,31,Den exit and reproduction,M,A
+Bear12,2014-06,698,30,Forest fruits,M,A
+Bear12,2014-07,730,31,Forest fruits,M,A
+Bear12,2014-08,664,28,Forest fruits,M,A
+Bear13,2014-07,136,23,Forest fruits,F,J
+Bear13,2014-08,179,31,Forest fruits,F,J
+Bear13,2014-09,185,30,Hyperphagia,F,J
+Bear13,2014-10,227,31,Hyperphagia,F,J
+Bear13,2014-11,166,24,Hyperphagia,F,J
+Bear13,2015-03,10,1,Den exit and reproduction,F,J
+Bear13,2015-04,86,23,Den exit and reproduction,F,J
+Bear13,2015-05,98,31,Den exit and reproduction,F,J
+Bear13,2015-06,77,29,Forest fruits,F,J
+Bear13,2015-07,67,27,Forest fruits,F,J
+Bear14,2014-06,215,10,Forest fruits,M,J
+Bear14,2014-07,207,31,Forest fruits,M,J
+Bear14,2014-08,178,31,Forest fruits,M,J
+Bear14,2014-09,241,30,Hyperphagia,M,J
+Bear14,2014-10,222,31,Hyperphagia,M,J
+Bear14,2014-11,231,30,Winter sleep,M,J
+Bear14,2014-12,118,22,Winter sleep,M,J
+Bear14,2015-01,108,21,Winter sleep,M,J
+Bear14,2015-02,224,28,Winter sleep,M,J
+Bear14,2015-03,209,30,Winter sleep,M,J
+Bear14,2015-04,68,25,Den exit and reproduction,M,J
+Bear15,2014-07,211,24,Forest fruits,M,A
+Bear15,2014-08,266,31,Forest fruits,M,A
+Bear15,2014-09,287,30,Hyperphagia,M,A
+Bear15,2014-10,280,31,Hyperphagia,M,A
+Bear15,2014-11,267,30,Winter sleep,M,A
+Bear15,2014-12,20,6,Winter sleep,M,A
+Bear15,2015-02,1,1,Winter sleep,M,A
+Bear15,2015-03,1,1,Winter sleep,M,A
+Bear15,2015-04,66,16,Den exit and reproduction,M,A
+Bear15,2015-05,141,31,Den exit and reproduction,M,A
+Bear15,2015-06,120,30,Forest fruits,M,A
+Bear15,2015-07,121,30,Forest fruits,M,A
+Bear16,2014-08,281,28,Forest fruits,F,A
+Bear16,2014-09,259,30,Hyperphagia,F,A
+Bear16,2014-10,283,31,Hyperphagia,F,A
+Bear16,2014-11,28,5,Hyperphagia,F,A
+Bear16,2015-04,98,16,Den exit and reproduction,F,A
+Bear16,2015-05,290,31,Den exit and reproduction,F,A
+Bear16,2015-06,238,30,Den exit and reproduction,F,A
+Bear16,2015-07,248,30,Forest fruits,F,A
+Bear17,2014-08,18,2,Hyperphagia,M,A
+Bear17,2014-09,271,30,Hyperphagia,M,A
+Bear17,2014-10,266,31,Hyperphagia,M,A
+Bear17,2014-11,176,27,Winter sleep,M,A
+Bear17,2014-12,1,1,Winter sleep,M,A
+Bear17,2015-03,46,10,Winter sleep,M,A
+Bear17,2015-04,131,30,Den exit and reproduction,M,A
+Bear17,2015-05,115,27,Den exit and reproduction,M,A
+Bear18,2012-07,262,27,Forest fruits,M,J
+Bear18,2012-08,305,31,Forest fruits,M,J
+Bear18,2012-09,264,30,Hyperphagia,M,J
+Bear18,2012-10,160,31,Hyperphagia,M,J
+Bear18,2012-11,251,30,Winter sleep,M,J
+Bear18,2012-12,247,31,Winter sleep,M,J
+Bear18,2013-01,186,28,Winter sleep,M,J
+Bear18,2013-02,120,23,Winter sleep,M,J
+Bear18,2013-03,260,30,Winter sleep,M,J
+Bear18,2013-04,245,30,Den exit and reproduction,M,J
+Bear18,2013-05,144,17,Den exit and reproduction,M,J
