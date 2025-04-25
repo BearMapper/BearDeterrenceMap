@@ -7,28 +7,18 @@ import os
 import datetime
 import json
 from datetime import datetime as dt
-
-# Constants
-COORDINATES_CSV = "data/device_data/artificial_device_coordinates.csv"
-POLYGON_COORDINATES_CSV = "data/areas/user_drawn_area_cities.csv"
+from wildlife_db import WildlifeDatabase  # Import the database handler
 
 class JapanDeterrentSystem:
     """
     Class to handle the Japan Bear Deterrent System visualization and functionality.
+    Using SQLite database for data storage.
     """
     
     def __init__(self):
         """Initialize the Japan Deterrent System."""
-        # Ensure directories exist
-        os.makedirs(os.path.dirname(COORDINATES_CSV), exist_ok=True)
-        os.makedirs(os.path.dirname(POLYGON_COORDINATES_CSV), exist_ok=True)
-        
-        # Initialize the CSV files if they don't exist
-        if not os.path.exists(COORDINATES_CSV):
-            pd.DataFrame(columns=["id", "timestamp", "lat", "lng"]).to_csv(COORDINATES_CSV, index=False)
-
-        if not os.path.exists(POLYGON_COORDINATES_CSV):
-            pd.DataFrame(columns=["polygon_id", "timestamp", "name", "coordinates"]).to_csv(POLYGON_COORDINATES_CSV, index=False)
+        # Initialize the database connection
+        self.db = WildlifeDatabase("wildlife_data.db")
         
         # Load data at startup
         self.existing_markers = self.load_existing_data()
@@ -45,99 +35,42 @@ class JapanDeterrentSystem:
     
     # Note the _self parameter to make it cacheable
     @st.cache_data(ttl=3600)  # Cache for 1 hour
-    def get_image_files(_self, directory_path, start_date=None, end_date=None, include_unsuccessful=False, daily_time_filter=None):
+    def get_image_files(_self, device_id, image_type="device", start_date=None, end_date=None, 
+                         include_unsuccessful=False, daily_time_filter=None, limit=100, offset=0):
         """
-        Cache the listing of image files in a directory with datetime filtering
+        Get filtered images for a device from the database
         
         Args:
-            directory_path (str): Path to the directory containing images
+            device_id (str): Device ID to filter by
+            image_type (str): "device" or "trail"
             start_date (datetime, optional): Start date for filtering
             end_date (datetime, optional): End date for filtering
             include_unsuccessful (bool): Whether to include unsuccessful_parsing images
             daily_time_filter (tuple, optional): (start_hour, end_hour) for filtering by time of day
+            limit (int): Maximum number of results to return
+            offset (int): Offset for pagination
             
         Returns:
-            list: List of image filenames that match the criteria
+            list: List of image paths and metadata that match the criteria
         """
-        if not os.path.exists(directory_path):
+        # Query database for matching images
+        df = _self.db.get_images(
+            device_id=device_id, 
+            image_type=image_type,
+            start_date=start_date,
+            end_date=end_date,
+            daily_time_filter=daily_time_filter,
+            include_unsuccessful=include_unsuccessful,
+            limit=limit,
+            offset=offset
+        )
+        
+        # Convert to list of dictionaries with image paths
+        if df.empty:
             return []
-        
-        # Get all image files
-        all_images = [f for f in os.listdir(directory_path) 
-                     if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-        
-        # If no filtering is needed, return all images
-        if start_date is None and end_date is None and daily_time_filter is None and include_unsuccessful:
-            return all_images
-        
-        filtered_images = []
-        for img in all_images:
-            # Check if it's an unsuccessful parsing image
-            is_unsuccessful = "unsuccessful_parsing" in img
             
-            # Skip unsuccessful parsing images if not included
-            if is_unsuccessful and not include_unsuccessful:
-                continue
-            
-            # Always include unsuccessful images if they're requested
-            if is_unsuccessful and include_unsuccessful:
-                filtered_images.append(img)
-                continue
-                
-            # For regular images, check date if filters are applied
-            if start_date is not None or end_date is not None or daily_time_filter is not None:
-                # Extract date from filename based on the pattern
-                try:
-                    if "trail_processed" in directory_path:
-                        # Format: yyyy.MM.dd.hhmm.jpeg
-                        date_part = img.split('.jpeg')[0]  # Remove extension
-                        img_date = dt.strptime(date_part, "%Y.%m.%d.%H%M")
-                    elif "device" in directory_path:
-                        # Format: xxx_xxx_yyyy.mm.dd.hhmm_0.jpeg
-                        date_parts = img.split('_')
-                        if len(date_parts) >= 3:
-                            date_str = date_parts[2]  # yyyy.mm.dd.hhmm
-                            img_date = dt.strptime(date_str, "%Y.%m.%d.%H%M")
-                        else:
-                            # Can't parse date, skip this image
-                            continue
-                    else:
-                        # Unknown directory type, skip this image
-                        continue
-                    
-                    # Check if the image passes all applicable filters
-                    passes_date_filter = True
-                    passes_daily_time_filter = True
-                    
-                    # Apply date range filter if provided
-                    if start_date is not None and end_date is not None:
-                        passes_date_filter = img_date >= start_date and img_date <= end_date
-                    
-                    # Apply daily time filter if provided
-                    if daily_time_filter is not None:
-                        daily_start_hour, daily_end_hour = daily_time_filter
-                        img_hour = img_date.hour
-                        
-                        if daily_start_hour <= daily_end_hour:
-                            # Normal time range (e.g., 9:00 to 17:00)
-                            passes_daily_time_filter = daily_start_hour <= img_hour <= daily_end_hour
-                        else:
-                            # Overnight time range (e.g., 22:00 to 6:00)
-                            passes_daily_time_filter = img_hour >= daily_start_hour or img_hour <= daily_end_hour
-                    
-                    # Add image if it passes all filters
-                    if passes_date_filter and passes_daily_time_filter:
-                        filtered_images.append(img)
-                        
-                except (ValueError, IndexError):
-                    # If date parsing fails, skip this image
-                    continue
-            else:
-                # No date filters, include all regular images
-                filtered_images.append(img)
-        
-        return filtered_images
-
+        return df.to_dict('records')
+    
     # Note the _self parameter to make it cacheable
     @st.cache_data(ttl=3600)  # Cache for 1 hour
     def format_device_id(_self, raw_device_id):
@@ -154,61 +87,25 @@ class JapanDeterrentSystem:
             return device_id
 
     def load_existing_data(self):
-        """Load custom marker data from CSV"""
-        if os.path.exists(COORDINATES_CSV):
-            return pd.read_csv(COORDINATES_CSV)
-        return pd.DataFrame(columns=["id", "timestamp", "lat", "lng"])
+        """Load custom marker data from database"""
+        return self.db.get_markers()
 
     def load_polygon_data(self):
-        """Load polygon data from CSV"""
-        if os.path.exists(POLYGON_COORDINATES_CSV):
-            df = pd.read_csv(POLYGON_COORDINATES_CSV)
-            # Convert coordinates from string to list
-            if not df.empty and 'coordinates' in df.columns:
-                df['coordinates'] = df['coordinates'].apply(lambda x: json.loads(x) if isinstance(x, str) else x)
-            return df
-        return pd.DataFrame(columns=["polygon_id", "timestamp", "name", "coordinates"])
+        """Load polygon data from database"""
+        return self.db.get_polygons()
 
     def load_deterrent_data(self):
-        """Load deterrent device data from CSV"""
-        csv_path = "data/device_data/deterrent_devices.csv"
-        if os.path.exists(csv_path):
-            return pd.read_csv(csv_path)
-        else:
-            # Create empty DataFrame
-            empty_df = pd.DataFrame(columns=["id", "lat", "lng"])
-            empty_df.to_csv(csv_path, index=False)
-            return empty_df
+        """Load deterrent device data from database"""
+        return self.db.get_deterrent_devices()
 
     def get_next_id(self):
         """Get next available ID for markers"""
-        if os.path.exists(COORDINATES_CSV):
-            df = pd.read_csv(COORDINATES_CSV)
-            if not df.empty and 'id' in df.columns:
-                # Extract numeric IDs
-                numeric_ids = []
-                for id_val in df['id']:
-                    try:
-                        numeric_ids.append(int(id_val))
-                    except (ValueError, TypeError):
-                        pass
-                if numeric_ids:
-                    return max(numeric_ids) + 1
-        return 1
+        return self.db.get_next_marker_id()
 
     def get_next_polygon_id(self):
         """Get next available ID for polygons"""
-        if os.path.exists(POLYGON_COORDINATES_CSV):
-            df = pd.read_csv(POLYGON_COORDINATES_CSV)
-            if not df.empty and 'polygon_id' in df.columns:
-                # Extract IDs and find max
-                try:
-                    numeric_ids = [int(pid.split('-')[1]) for pid in df['polygon_id'] if isinstance(pid, str) and pid.startswith('poly-')]
-                    if numeric_ids:
-                        return max(numeric_ids) + 1
-                except (ValueError, IndexError):
-                    pass
-        return 1
+        next_id = self.db.get_next_polygon_id()
+        return next_id
 
     def save_coordinates_from_geojson(self, drawings):
         """Save coordinates from GeoJSON drawings"""
@@ -227,22 +124,8 @@ class JapanDeterrentSystem:
                 next_id = self.get_next_id()
                 marker_id = str(next_id).zfill(4)
                 
-                # Get timestamp
-                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                
-                # Create new row
-                new_data = {
-                    "id": marker_id,
-                    "timestamp": timestamp,
-                    "lat": lat,
-                    "lng": lng
-                }
-                
-                # Load existing data, append new row, and save
-                df = self.load_existing_data()
-                new_row = pd.DataFrame([new_data])
-                df = pd.concat([df, new_row], ignore_index=True)
-                df.to_csv(COORDINATES_CSV, index=False)
+                # Save to database
+                self.db.save_marker(marker_id, lat, lng)
                 
                 saved_points.append((lat, lng, marker_id))
                 
@@ -255,25 +138,11 @@ class JapanDeterrentSystem:
                 next_id = self.get_next_polygon_id()
                 polygon_id = f"poly-{next_id}"
                 
-                # Get timestamp
-                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                
                 # We'll use a default name initially
                 name = f"Area {next_id}"
                 
-                # Create new row for polygon data - store coordinates as a JSON string
-                new_polygon_data = {
-                    "polygon_id": polygon_id,
-                    "timestamp": timestamp,
-                    "name": name,
-                    "coordinates": json.dumps(coordinates)
-                }
-                
-                # Load existing polygon data, append new row, and save
-                df = self.load_polygon_data()
-                new_row = pd.DataFrame([new_polygon_data])
-                df = pd.concat([df, new_row], ignore_index=True)
-                df.to_csv(POLYGON_COORDINATES_CSV, index=False)
+                # Save to database
+                self.db.save_polygon(polygon_id, name, coordinates)
                 
                 saved_polygons.append((coordinates, polygon_id, name))
         
@@ -285,59 +154,43 @@ class JapanDeterrentSystem:
 
     def delete_marker(self, marker_id):
         """Delete a single marker by ID"""
-        if os.path.exists(COORDINATES_CSV):
-            df = pd.read_csv(COORDINATES_CSV)
-            # Filter out the marker with the given ID
-            df = df[df['id'] != marker_id]
-            df.to_csv(COORDINATES_CSV, index=False)
+        result = self.db.delete_marker(marker_id)
+        if result:
             # Refresh the data
             self.existing_markers = self.load_existing_data()
-            return True
-        return False
+        return result
 
     def delete_polygon(self, polygon_id):
         """Delete a single polygon by ID"""
-        if os.path.exists(POLYGON_COORDINATES_CSV):
-            df = pd.read_csv(POLYGON_COORDINATES_CSV)
-            # Filter out the polygon with the given ID
-            df = df[df['polygon_id'] != polygon_id]
-            df.to_csv(POLYGON_COORDINATES_CSV, index=False)
+        result = self.db.delete_polygon(polygon_id)
+        if result:
             # Refresh the data
             self.existing_polygons = self.load_polygon_data()
-            return True
-        return False
+        return result
 
     def delete_all_markers(self):
         """Delete all markers"""
-        if os.path.exists(COORDINATES_CSV):
-            # Create a new empty DataFrame with just the headers
-            pd.DataFrame(columns=["id", "timestamp", "lat", "lng"]).to_csv(COORDINATES_CSV, index=False)
+        result = self.db.delete_all_markers()
+        if result:
             # Refresh the data
             self.existing_markers = self.load_existing_data()
-            return True
-        return False
+        return result
 
     def delete_all_polygons(self):
         """Delete all polygons"""
-        if os.path.exists(POLYGON_COORDINATES_CSV):
-            # Create a new empty DataFrame with just the headers
-            pd.DataFrame(columns=["polygon_id", "timestamp", "name", "coordinates"]).to_csv(POLYGON_COORDINATES_CSV, index=False)
+        result = self.db.delete_all_polygons()
+        if result:
             # Refresh the data
             self.existing_polygons = self.load_polygon_data()
-            return True
-        return False
+        return result
 
     def update_polygon_name(self, polygon_id, new_name):
         """Update polygon name"""
-        if os.path.exists(POLYGON_COORDINATES_CSV):
-            df = pd.read_csv(POLYGON_COORDINATES_CSV)
-            if polygon_id in df['polygon_id'].values:
-                df.loc[df['polygon_id'] == polygon_id, 'name'] = new_name
-                df.to_csv(POLYGON_COORDINATES_CSV, index=False)
-                # Refresh the data
-                self.existing_polygons = self.load_polygon_data()
-                return True
-        return False
+        result = self.db.update_polygon_name(polygon_id, new_name)
+        if result:
+            # Refresh the data
+            self.existing_polygons = self.load_polygon_data()
+        return result
 
     def create_map(self):
         """Create a Folium map with all markers, deterrents, and polygons"""
@@ -391,16 +244,12 @@ class JapanDeterrentSystem:
         # Add existing deterrent devices with simple popups
         for _, row in self.deterrent_data.iterrows():
             # Get the device ID
-            raw_device_id = row['Directory name']
+            raw_device_id = row.get('directory_name', row.get('id', ''))
             device_id = self.format_device_id(raw_device_id)
             
-            # Build paths to image directories
-            device_images_path = f"data/bear_pictures/{device_id}/device/"
-            trail_images_path = f"data/bear_pictures/{device_id}/trail_processed/"
-            
-            # Get image counts (not loading the actual images)
-            device_image_count = len(self.get_image_files(device_images_path))
-            trail_image_count = len(self.get_image_files(trail_images_path))
+            # Get image counts from the database
+            device_image_count = self.db.get_image_count(device_id, "device")
+            trail_image_count = self.db.get_image_count(device_id, "trail")
             
             # Create a simple popup with counts and ID info
             popup_html = f"""
@@ -507,8 +356,8 @@ class JapanDeterrentSystem:
             position="topleft",
             draw_options={
                 'polyline': False,
-                'rectangle': True,  # Enable rectangle drawing as well
-                'polygon': True,    # Enable polygon drawing
+                'rectangle': True,
+                'polygon': True,
                 'circle': False,
                 'marker': True,
                 'circlemarker': False,
@@ -522,315 +371,269 @@ class JapanDeterrentSystem:
         
         return m
 
+    # In class JapanDeterrentSystem within japan_deterrents.py:
+
     def display_device_images_in_sidebar(self):
         """Display images for a selected device in the sidebar with datetime filtering"""
         st.sidebar.header("Japan Deterrent Images")
-        
+
         # Get device IDs for selection
         device_ids = []
-        for _, row in self.deterrent_data.iterrows():
-            raw_id = row['Directory name']
-            formatted_id = self.format_device_id(raw_id)
-            device_ids.append(formatted_id)
-        
-        # Add "None" as the first option (default)
+        if not self.deterrent_data.empty:
+            id_col = 'id' if 'id' in self.deterrent_data.columns else 'directory_name'
+            if id_col in self.deterrent_data.columns:
+                for raw_id in self.deterrent_data[id_col]:
+                    formatted_id = self.format_device_id(raw_id)
+                    if formatted_id not in device_ids:
+                         device_ids.append(formatted_id)
+                device_ids.sort()
+            else:
+                st.sidebar.warning(f"Could not find ID column ('{id_col}') in deterrent data.")
+
         device_options = ["None"] + device_ids
-        
-        # Add a select box to choose a device - default to None
+
+        # Store previous device selection to detect changes
+        if 'prev_selected_device' not in st.session_state:
+            st.session_state.prev_selected_device = "None"
+
         selected_device = st.sidebar.selectbox(
-            "Select Deterrent ID", 
+            "Select Deterrent ID",
             options=device_options,
-            index=0
+            index=0 # Default to "None"
+            # Consider adding a key if needed elsewhere: key="selected_device_key"
         )
-        
-        # Only show filters and images if a device is selected
+
+        # --- Reset image display flags if device changes ---
+        if selected_device != st.session_state.prev_selected_device:
+            st.session_state.show_device_images = False
+            st.session_state.show_trail_images = False
+            # Potentially reset page numbers too
+            if 'device_page' in st.session_state: del st.session_state['device_page']
+            if 'trail_page' in st.session_state: del st.session_state['trail_page']
+            st.session_state.prev_selected_device = selected_device
+            # We need to rerun ONLY if a device *was* selected and is now different,
+            # otherwise selecting 'None' initially would cause an unnecessary rerun.
+            # However, Streamlit handles reruns on widget changes anyway.
+
         if selected_device and selected_device != "None":
-            # Device images path
-            device_path = f"data/bear_pictures/{selected_device}/device/"
-            # Trail images path
-            trail_path = f"data/bear_pictures/{selected_device}/trail_processed/"
-            
+            # Initialize filter variables
+            use_filter = False
+            start_date = None
+            end_date = None
+            filter_mode = "Date Range" # Default filter mode
+            daily_time_filter = None
+
             with st.sidebar.expander("Date/Time Filters", expanded=False):
-                # Year selection (start from 2024)
+                # --- Date Filter Section START ---
                 min_year = 2024
-                max_year = dt.now().year
+                now = datetime.datetime.now()
+                max_year = now.year
                 years = list(range(min_year, max_year + 1))
-                
-                # Filter mode selection
-                filter_mode = st.radio(
-                    "Filter Mode", 
-                    ["Date Range", "Daily Time Period"], 
-                    key="filter_mode"
-                )
-                
+
+                try:
+                    default_end_year_index = years.index(now.year)
+                except ValueError:
+                    default_end_year_index = len(years) - 1
+
+                default_end_month_index = now.month - 1
+                default_end_day_index = now.day - 1
+
+                filter_mode = st.radio("Filter Mode", ["Date Range", "Daily Time Period"], key="filter_mode")
+
                 if filter_mode == "Date Range":
-                    # Original date range filter
-                    # Create date filter inputs
                     col1, col2 = st.columns(2)
-                    
                     with col1:
                         st.write("Start Date:")
-                        start_year = st.selectbox("Year", years, key="start_year")
-                        start_month = st.selectbox("Month", range(1, 13), key="start_month")
-                        # Calculate max days for the selected month
-                        max_days = 31  # Default
-                        if start_month in [4, 6, 9, 11]:
-                            max_days = 30
-                        elif start_month == 2:
-                            # Simple leap year check
-                            if start_year % 4 == 0 and (start_year % 100 != 0 or start_year % 400 == 0):
-                                max_days = 29
-                            else:
-                                max_days = 28
-                                
-                        start_day = st.selectbox("Day", range(1, max_days + 1), key="start_day")
-                        
+                        start_year = st.selectbox("Year", years, key="start_year", index=0)
+                        start_month = st.selectbox("Month", range(1, 13), key="start_month", index=0)
+                        # Improve day selection safety
+                        start_max_days = pd.Timestamp(start_year, start_month, 1).days_in_month
+                        start_day_options = range(1, start_max_days + 1)
+                        start_day_index = 0 # Default to 1st
+                        start_day = st.selectbox("Day", start_day_options, key="start_day", index=start_day_index)
+
                     with col2:
                         st.write("End Date:")
-                        end_year = st.selectbox("Year", years, key="end_year")
-                        end_month = st.selectbox("Month", range(1, 13), key="end_month")
-                        # Calculate max days for the selected month
-                        max_days = 31  # Default
-                        if end_month in [4, 6, 9, 11]:
-                            max_days = 30
-                        elif end_month == 2:
-                            # Simple leap year check
-                            if end_year % 4 == 0 and (end_year % 100 != 0 or end_year % 400 == 0):
-                                max_days = 29
-                            else:
-                                max_days = 28
-                                
-                        end_day = st.selectbox("Day", range(1, max_days + 1), key="end_day")
-                    
-                    # Time filter
+                        end_year = st.selectbox("Year", years, key="end_year", index=default_end_year_index)
+                        end_month = st.selectbox("Month", range(1, 13), key="end_month", index=default_end_month_index)
+                        # Improve day selection safety
+                        end_max_days = pd.Timestamp(end_year, end_month, 1).days_in_month
+                        end_day_options = range(1, end_max_days + 1)
+                        # Ensure default index is valid
+                        safe_end_day_index = min(default_end_day_index, end_max_days - 1)
+                        end_day = st.selectbox("Day", end_day_options, key="end_day", index=safe_end_day_index)
+
                     st.write("Time Range (24-hour format):")
                     start_hour = st.slider("Start Hour", 0, 23, 0, key="start_hour")
                     end_hour = st.slider("End Hour", 0, 23, 23, key="end_hour")
-                    
-                    # Create datetime objects for filtering
+
                     try:
                         start_date = dt(start_year, start_month, start_day, start_hour, 0)
                         end_date = dt(end_year, end_month, end_day, end_hour, 59)
-                        
-                        # Validate date range
-                        if start_date > end_date:
-                            st.error("Start date cannot be after end date!")
-                            use_filter = False
-                        else:
-                            use_filter = True
-                            st.success(f"Filtering images from {start_date.strftime('%Y-%m-%d %H:%M')} to {end_date.strftime('%Y-%m-%d %H:%M')}")
-                    except ValueError:
-                        st.error("Invalid date selected!")
-                        use_filter = False
-                
-                else:  # Daily Time Period mode
+                        if start_date > end_date: st.error("Start date cannot be after end date!"); use_filter = False
+                        else: use_filter = True; st.success(f"Filtering: {start_date.strftime('%Y-%m-%d %H:%M')} to {end_date.strftime('%Y-%m-%d %H:%M')}")
+                    except ValueError: st.error("Invalid date selected!"); use_filter = False
+
+                else: # Daily Time Period mode
                     st.markdown("### Daily Time Period Filter")
-                    st.write("Filter images for a specific time period across all dates")
-                    
-                    # Date range selection (more compact for this mode)
+                    # ... (keep logic for daily filter) ...
                     col1, col2 = st.columns(2)
                     with col1:
-                        start_year = st.selectbox("From Year", years, key="period_start_year")
-                        start_month = st.selectbox("Month", range(1, 13), key="period_start_month")
+                        period_start_year = st.selectbox("From Year", years, key="period_start_year", index=0)
+                        period_start_month = st.selectbox("Month", range(1, 13), key="period_start_month", index=0)
                     with col2:
-                        end_year = st.selectbox("To Year", years, key="period_end_year")
-                        end_month = st.selectbox("Month", range(1, 13), key="period_end_month")
-                    
-                    # Time period selection (the main focus of this mode)
+                        period_end_year = st.selectbox("To Year", years, key="period_end_year", index=default_end_year_index)
+                        period_end_month = st.selectbox("Month", range(1, 13), key="period_end_month", index=default_end_month_index)
+
                     st.markdown("#### Time of Day to Include:")
                     daily_start_hour = st.slider("Daily Start Hour", 0, 23, 21, key="daily_start_hour")
                     daily_end_hour = st.slider("Daily End Hour", 0, 23, 23, key="daily_end_hour")
-                    
-                    # For clearer feedback about the selected time range
-                    if daily_start_hour <= daily_end_hour:
-                        time_range_text = f"Every day from {daily_start_hour}:00 to {daily_end_hour}:59"
-                    else:
-                        time_range_text = f"Every night from {daily_start_hour}:00 to {daily_end_hour}:59 (overnight)"
-                    
+
+                    if daily_start_hour <= daily_end_hour: time_range_text = f"Every day from {daily_start_hour}:00 to {daily_end_hour}:59"
+                    else: time_range_text = f"Every night from {daily_start_hour}:00 to {daily_end_hour}:59 (overnight)"
                     st.info(time_range_text)
-                    
-                    # Set broad date range but will filter by time of day in image filtering function
                     try:
-                        # First day of start month
-                        start_date = dt(start_year, start_month, 1, 0, 0)
-                        
-                        # Last day of end month
-                        if end_month == 12:
-                            # December edge case
-                            last_day = 31
-                        else:
-                            # Use the first day of next month minus one day
-                            next_month = end_month + 1
-                            next_month_year = end_year
-                            if next_month > 12:
-                                next_month = 1
-                                next_month_year += 1
-                            last_day = (dt(next_month_year, next_month, 1) - datetime.timedelta(days=1)).day
-                        
-                        end_date = dt(end_year, end_month, last_day, 23, 59)
-                        
-                        # Store the daily hour range in session state
-                        st.session_state["daily_time_filter"] = (daily_start_hour, daily_end_hour)
-                        
+                        # Use the full year/month range selected for the period
+                        start_date = dt(period_start_year, period_start_month, 1, 0, 0)
+                        period_end_max_days = pd.Timestamp(period_end_year, period_end_month, 1).days_in_month
+                        end_date = dt(period_end_year, period_end_month, period_end_max_days, 23, 59)
+
+                        daily_time_filter = (daily_start_hour, daily_end_hour) # Set the filter tuple
                         use_filter = True
-                        st.success(f"Filtering images from {start_date.strftime('%Y-%m')} to {end_date.strftime('%Y-%m')} during {time_range_text}")
-                    except ValueError:
-                        st.error("Invalid date selection!")
-                        use_filter = False
-                
-                # Option to include unsuccessful parsing images
+                        st.success(f"Filtering: {start_date.strftime('%Y-%m')} to {end_date.strftime('%Y-%m')} during {time_range_text}")
+                    except ValueError: st.error("Invalid date selection!"); use_filter = False
+                 # --- Date Filter Section END ---
+
                 include_unsuccessful = st.checkbox("Include 'unsuccessful_parsing' images", value=False)
-                
-                # Display reset button
                 if st.button("Reset Filters"):
-                    # Clear the session state for all filter values
-                    for key in ["start_year", "start_month", "start_day", "end_year", "end_month", "end_day", "start_hour", "end_hour"]:
-                        if key in st.session_state:
-                            del st.session_state[key]
+                    st.session_state.show_device_images = False # Hide images on reset
+                    st.session_state.show_trail_images = False
+                    # Clear specific filter keys if needed
+                    # ...
                     st.rerun()
-            
-            # Apply the filter or get all images based on expanded state
-            if "filter_expanded" in st.session_state and st.session_state.filter_expanded:
-                if use_filter:
-                    if filter_mode == "Date Range":
-                        # Standard date range filtering
-                        device_images = self.get_image_files(device_path, start_date, end_date, include_unsuccessful)
-                        trail_images = self.get_image_files(trail_path, start_date, end_date, include_unsuccessful)
-                    else:
-                        # Daily time period filtering
-                        daily_time_filter = st.session_state.get("daily_time_filter")
-                        device_images = self.get_image_files(device_path, start_date, end_date, include_unsuccessful, daily_time_filter)
-                        trail_images = self.get_image_files(trail_path, start_date, end_date, include_unsuccessful, daily_time_filter)
-                else:
-                    device_images = self.get_image_files(device_path, include_unsuccessful=include_unsuccessful)
-                    trail_images = self.get_image_files(trail_path, include_unsuccessful=include_unsuccessful)
-            else:
-                # No filtering
-                device_images = self.get_image_files(device_path)
-                trail_images = self.get_image_files(trail_path)
-            
-            # Display counts and load buttons
+
+            # Define filter parameters based on UI state
+            filter_start_date = start_date if use_filter else None
+            filter_end_date = end_date if use_filter else None
+            filter_daily_time = daily_time_filter if use_filter and filter_mode == "Daily Time Period" else None
+
+            # Get image lists (potentially filtered) - runs on every interaction, but cached
+            device_image_list = self.get_image_files(selected_device, image_type="device", start_date=filter_start_date, end_date=filter_end_date, include_unsuccessful=include_unsuccessful, daily_time_filter=filter_daily_time)
+            trail_image_list = self.get_image_files(selected_device, image_type="trail", start_date=filter_start_date, end_date=filter_end_date, include_unsuccessful=include_unsuccessful, daily_time_filter=filter_daily_time)
+
+            # --- Button Logic using Session State ---
             col1, col2 = st.sidebar.columns(2)
-            
             with col1:
-                st.button("Load Device Images", 
-                          key="load_device", 
-                          help=f"{len(device_images)} device images available",
-                          use_container_width=True)
-                
+                if st.button("Load Device Images", key="load_device_btn", help=f"{len(device_image_list)} device images available", use_container_width=True):
+                    st.session_state.show_device_images = True
+                    st.session_state.show_trail_images = False
+                    # Reset page number when button clicked
+                    st.session_state.device_page = 1
             with col2:
-                st.button("Load Trail Images", 
-                          key="load_trail", 
-                          help=f"{len(trail_images)} trail images available",
-                          use_container_width=True)
-            
-            # Display device images if that button was clicked
-            if st.session_state.get("load_device", False):
+                 if st.button("Load Trail Images", key="load_trail_btn", help=f"{len(trail_image_list)} trail images available", use_container_width=True):
+                    st.session_state.show_trail_images = True
+                    st.session_state.show_device_images = False
+                     # Reset page number when button clicked
+                    st.session_state.trail_page = 1
+            # --- End Button Logic ---
+
+            # --- Display Logic using Session State ---
+            if st.session_state.get("show_device_images", False):
                 st.sidebar.subheader("Device Images")
-                if device_images:
-                    st.sidebar.write(f"Found {len(device_images)} device images")
-                    
-                    # Add a toggle for image info display
-                    show_image_info = st.sidebar.checkbox("Show detailed image info", value=False, key="show_device_info")
-                    
-                    # Create pagination for better performance
+                if device_image_list:
+                    st.sidebar.write(f"Found {len(device_image_list)} device images")
+                    show_image_info = st.sidebar.checkbox("Show detailed image info", value=False, key="show_device_info_cb") # Unique key
                     items_per_page = 5
-                    total_pages = (len(device_images) + items_per_page - 1) // items_per_page
-                    
+                    total_pages = (len(device_image_list) + items_per_page - 1) // items_per_page
+
+                    # Use session state for page number
+                    if 'device_page' not in st.session_state:
+                        st.session_state.device_page = 1
+
+                    page = 1 # Default if only one page
                     if total_pages > 1:
-                        page = st.sidebar.number_input("Page", min_value=1, max_value=total_pages, value=1)
-                        st.sidebar.write(f"Page {page} of {total_pages}")
-                    else:
-                        page = 1
-                    
-                    # Calculate slice indices
-                    start_idx = (page - 1) * items_per_page
-                    end_idx = min(start_idx + items_per_page, len(device_images))
-                    
-                    # Display images with information
-                    for img in device_images[start_idx:end_idx]:
-                        img_path = os.path.join(device_path, img)
-                        
-                        if show_image_info:
-                            # Extract and display date information from filename
-                            try:
-                                # Format: xxx_xxx_yyyy.mm.dd.hhmm_0.jpeg
-                                date_parts = img.split('_')
-                                if len(date_parts) >= 3:
-                                    date_str = date_parts[2]  # yyyy.mm.dd.hhmm
-                                    img_date = dt.strptime(date_str, "%Y.%m.%d.%H%M")
-                                    date_info = img_date.strftime("%Y-%m-%d %H:%M")
-                                    caption = f"{img}\nDate: {date_info}"
-                                else:
-                                    caption = img
-                            except (ValueError, IndexError):
-                                caption = img
+                        # Get page number from session state
+                        page = st.sidebar.number_input("Page", min_value=1, max_value=total_pages,
+                                                       key="device_page", # Use session state key here
+                                                       help="Select page number")
+                        st.sidebar.write(f"Page {st.session_state.device_page} of {total_pages}")
+
+                    start_idx = (st.session_state.device_page - 1) * items_per_page # Use state variable
+                    end_idx = min(start_idx + items_per_page, len(device_image_list))
+
+                    for img_data in device_image_list[start_idx:end_idx]:
+                        img_path = img_data['image_path']; filename = img_data['filename']
+                        caption = filename
+                        if show_image_info and img_data.get('timestamp'): # Use .get for safety
+                            try: img_date = dt.fromisoformat(img_data['timestamp']); date_info = img_date.strftime("%Y-%m-%d %H:%M"); caption = f"{filename}\nDate: {date_info}"
+                            except (ValueError, TypeError): pass
+                        if os.path.exists(img_path):
+                             st.sidebar.image(img_path, caption=caption, use_container_width=True)
                         else:
-                            caption = img
-                            
-                        st.sidebar.image(img_path, caption=caption, use_container_width=True)
+                             st.sidebar.warning(f"Img not found: {img_path}") # Shorter warning
                 else:
                     st.sidebar.info("No device images found with the current filters")
-            
-            # Display trail images if that button was clicked
-            if st.session_state.get("load_trail", False):
+
+            if st.session_state.get("show_trail_images", False):
                 st.sidebar.subheader("Trail Images")
-                if trail_images:
-                    st.sidebar.write(f"Found {len(trail_images)} trail images")
-                    
-                    # Add a toggle for image info display
-                    show_image_info = st.sidebar.checkbox("Show detailed image info", value=False, key="show_trail_info")
-                    
-                    # Create pagination for better performance
+                if trail_image_list:
+                    st.sidebar.write(f"Found {len(trail_image_list)} trail images")
+                    show_image_info = st.sidebar.checkbox("Show detailed image info", value=False, key="show_trail_info_cb") # Unique key
                     items_per_page = 5
-                    total_pages = (len(trail_images) + items_per_page - 1) // items_per_page
-                    
+                    total_pages = (len(trail_image_list) + items_per_page - 1) // items_per_page
+
+                    # Use session state for page number
+                    if 'trail_page' not in st.session_state:
+                        st.session_state.trail_page = 1
+
+                    page = 1 # Default if only one page
                     if total_pages > 1:
-                        page = st.sidebar.number_input("Page", min_value=1, max_value=total_pages, value=1, key="trail_page")
-                        st.sidebar.write(f"Page {page} of {total_pages}")
-                    else:
-                        page = 1
-                    
-                    # Calculate slice indices
-                    start_idx = (page - 1) * items_per_page
-                    end_idx = min(start_idx + items_per_page, len(trail_images))
-                    
-                    # Group images by parsing status
-                    successful_images = [img for img in trail_images[start_idx:end_idx] if "unsuccessful_parsing" not in img]
-                    unsuccessful_images = [img for img in trail_images[start_idx:end_idx] if "unsuccessful_parsing" in img]
-                    
-                    # Display successful images first
+                         # Get page number from session state
+                        page = st.sidebar.number_input("Page", min_value=1, max_value=total_pages,
+                                                       key="trail_page", # Use session state key
+                                                       help="Select page number")
+                        st.sidebar.write(f"Page {st.session_state.trail_page} of {total_pages}")
+
+                    start_idx = (st.session_state.trail_page - 1) * items_per_page # Use state variable
+                    end_idx = min(start_idx + items_per_page, len(trail_image_list))
+
+                    # Use .get() for safer dictionary access
+                    successful_images = [img for img in trail_image_list[start_idx:end_idx] if img.get('parsed_successfully', False)]
+                    unsuccessful_images = [img for img in trail_image_list[start_idx:end_idx] if not img.get('parsed_successfully', False)]
+
                     if successful_images:
-                        for img in successful_images:
-                            img_path = os.path.join(trail_path, img)
-                            
-                            if show_image_info:
-                                # Extract and display date information from filename
-                                try:
-                                    # Format: yyyy.MM.dd.hhmm.jpeg
-                                    date_part = img.split('.jpeg')[0]  # Remove extension
-                                    img_date = dt.strptime(date_part, "%Y.%m.%d.%H%M")
-                                    date_info = img_date.strftime("%Y-%m-%d %H:%M")
-                                    caption = f"{img}\nDate: {date_info}"
-                                except ValueError:
-                                    caption = img
+                        for img_data in successful_images:
+                            img_path = img_data['image_path']; filename = img_data['filename']
+                            caption = filename
+                            if show_image_info and img_data.get('timestamp'):
+                                try: img_date = dt.fromisoformat(img_data['timestamp']); date_info = img_date.strftime("%Y-%m-%d %H:%M"); caption = f"{filename}\nDate: {date_info}"
+                                except (ValueError, TypeError): pass
+                            if os.path.exists(img_path):
+                                st.sidebar.image(img_path, caption=caption, use_container_width=True)
                             else:
-                                caption = img
-                                
-                            st.sidebar.image(img_path, caption=caption, use_container_width=True)
-                    
-                    # Display unsuccessful images with a warning style
+                                st.sidebar.warning(f"Img not found: {img_path}")
+
                     if unsuccessful_images:
-                        st.sidebar.markdown("---")
-                        st.sidebar.warning("Images with unsuccessful parsing:")
-                        for img in unsuccessful_images:
-                            img_path = os.path.join(trail_path, img)
-                            st.sidebar.image(img_path, caption=img, use_container_width=True)
+                        st.sidebar.markdown("---"); st.sidebar.warning("Images with unsuccessful parsing:")
+                        for img_data in unsuccessful_images:
+                            img_path = img_data['image_path']; filename = img_data['filename']
+                            if os.path.exists(img_path):
+                                st.sidebar.image(img_path, caption=filename, use_container_width=True)
+                            else:
+                                st.sidebar.warning(f"Img not found: {img_path}")
+
                 else:
                     st.sidebar.info("No trail images found with the current filters")
+             # --- End Display Logic ---
+
         else:
-            # If no device is selected, show a message
             st.sidebar.info("Select a deterrent ID to view images")
+            # Clear flags when no device is selected
+            st.session_state.show_device_images = False
+            st.session_state.show_trail_images = False
+
+    # display_japan_deterrent_section and other methods remain the same...
+    # ...
 
     def display_japan_deterrent_section(self):
         """Display the Japan Deterrent System section in the Streamlit app."""
@@ -965,9 +768,78 @@ class JapanDeterrentSystem:
             st.dataframe(self.deterrent_data)
         
         with tab2:
-            # Areas tab - Implementation can be added here if needed
+            # Areas tab
             st.subheader("Areas Management")
-            st.write("Functionality for managing areas can be added here.")
+            
+            # Display existing polygons in a table
+            polygon_data = self.load_polygon_data()
+            
+            if not polygon_data.empty:
+                st.write(f"Found {len(polygon_data)} defined areas")
+                
+                # Create a table for polygon management
+                cols = st.columns([1, 2, 2, 1])
+                
+                # Headers
+                with cols[0]:
+                    st.write("**ID**")
+                with cols[1]:
+                    st.write("**Name**")
+                with cols[2]:
+                    st.write("**Created**")
+                with cols[3]:
+                    st.write("**Action**")
+                
+                # Draw a separator line
+                st.markdown("---")
+                
+                # Display each polygon in a row with edit/delete buttons
+                for index, row in polygon_data.iterrows():
+                    col1, col2, col3, col4 = st.columns([1, 2, 2, 1])
+                    
+                    with col1:
+                        st.write(f"{row['polygon_id']}")
+                    with col2:
+                        # Allow editing the name with a text input
+                        new_name = st.text_input(
+                            "Name", 
+                            value=row['name'], 
+                            key=f"name_{row['polygon_id']}",
+                            label_visibility="collapsed"
+                        )
+                        # Update if name changed
+                        if new_name != row['name']:
+                            if self.update_polygon_name(row['polygon_id'], new_name):
+                                st.success(f"Name updated to '{new_name}'")
+                                st.rerun()
+                    with col3:
+                        st.write(f"{row['timestamp']}")
+                    with col4:
+                        if st.button("Delete", key=f"delete_poly_{row['polygon_id']}"):
+                            if self.delete_polygon(row['polygon_id']):
+                                st.success(f"Area {row['polygon_id']} deleted")
+                                st.rerun()
+                            else:
+                                st.error(f"Failed to delete area {row['polygon_id']}")
+                
+                # Add a button to delete all polygons
+                if st.button("Delete All Areas", key="delete_all_polys"):
+                    # Confirm deletion
+                    if 'confirm_delete_all_polygons' not in st.session_state:
+                        st.session_state.confirm_delete_all_polygons = True
+                        st.warning("Are you sure you want to delete ALL areas? Click the button again to confirm.")
+                    else:
+                        # User confirmed, delete all polygons
+                        if self.delete_all_polygons():
+                            st.success("All areas have been deleted.")
+                            # Reset confirmation state
+                            st.session_state.confirm_delete_all_polygons = False
+                            # Rerun to update the display
+                            st.rerun()
+                        else:
+                            st.error("Error deleting areas.")
+            else:
+                st.info("No areas have been defined yet. Use the polygon or rectangle drawing tools on the map to create areas.")
 
 # This can be used for testing the component independently
 if __name__ == "__main__":
