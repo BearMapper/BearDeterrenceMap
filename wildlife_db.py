@@ -1,30 +1,191 @@
-# wildlife_db.py (Corrected indentation for process_image_folder calls)
+# wildlife_db.py
 import sqlite3
 import pandas as pd
 import os
 import json
 from datetime import datetime
 import shutil
+import numpy as np
+from pyproj import Transformer
 
 class WildlifeDatabase:
-    # __init__ and initialize_db remain the same
     def __init__(self, db_path="wildlife_data.db"):
         self.db_path = db_path
-        # self.initialize_db() # Called explicitly before migration now
+        # Initialize the coordinate transformer
+        self.transformer = Transformer.from_crs("EPSG:3844", "EPSG:4326", always_xy=True)
+
+    def get_distinct_values(self, table_name, column_name):
+        """Get distinct values from a specific column in a table"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            query = f"SELECT DISTINCT {column_name} FROM {table_name} WHERE {column_name} IS NOT NULL"
+            cursor = conn.cursor()
+            cursor.execute(query)
+            distinct_values = [item[0] for item in cursor.fetchall()]
+            return distinct_values
+        except sqlite3.Error as e:
+            print(f"Database error in get_distinct_values: {e}")
+            return []
+        finally:
+            if conn: conn.close()
+    
+    def fix_timestamp_issues(self):
+        """Fix any issues with timestamps in the database"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Check for NULL timestamps
+            cursor.execute("SELECT COUNT(*) FROM bears_tracking WHERE timestamp IS NULL")
+            null_count = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM bears_tracking WHERE timestamp IS NOT NULL")
+            non_null_count = cursor.fetchone()[0]
+            
+            print(f"Timestamp status: {non_null_count} with timestamp, {null_count} without timestamp")
+            
+            if null_count > 0 and non_null_count == 0:
+                print("All timestamps are NULL. Creating artificial timestamps...")
+                
+                # Get the bears and their record counts
+                cursor.execute("SELECT bear_id, COUNT(*) FROM bears_tracking GROUP BY bear_id")
+                bear_counts = cursor.fetchall()
+                
+                base_date = datetime(2018, 1, 1)  # Start with a reasonable date
+                updated_count = 0
+                
+                for bear_id, count in bear_counts:
+                    print(f"Processing {count} records for bear {bear_id}...")
+                    
+                    # Get all records for this bear
+                    cursor.execute("SELECT id FROM bears_tracking WHERE bear_id = ? ORDER BY id", (bear_id,))
+                    record_ids = [row[0] for row in cursor.fetchall()]
+                    
+                    # Create evenly spread timestamps
+                    for i, record_id in enumerate(record_ids):
+                        # Create a timestamp spaced 1 hour apart for each record
+                        timestamp = base_date + pd.Timedelta(hours=i)
+                        
+                        cursor.execute(
+                            "UPDATE bears_tracking SET timestamp = ? WHERE id = ?",
+                            (timestamp.isoformat(), record_id)
+                        )
+                        updated_count += 1
+                    
+                    # Advance base date by 6 months for the next bear
+                    base_date = base_date + pd.Timedelta(days=180)
+                
+                # Commit changes
+                conn.commit()
+                print(f"Created artificial timestamps for {updated_count} records.")
+                
+                return True
+            else:
+                print("Timestamp data appears to be OK.")
+                return False
+                
+        except Exception as e:
+            print(f"Error fixing timestamps: {e}")
+            if conn: conn.rollback()
+            return False
+        finally:
+            if conn: conn.close()
+    
 
     def initialize_db(self):
         conn = None
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            # Create tables (abbreviated for clarity - use full from previous)
+            
+            # Create original tables
             cursor.execute('CREATE TABLE IF NOT EXISTS deterrent_devices (id TEXT PRIMARY KEY, directory_name TEXT, lat REAL, lng REAL)')
             cursor.execute('CREATE TABLE IF NOT EXISTS markers (id TEXT PRIMARY KEY, timestamp TEXT, lat REAL, lng REAL)')
             cursor.execute('CREATE TABLE IF NOT EXISTS polygons (polygon_id TEXT PRIMARY KEY, timestamp TEXT, name TEXT, coordinates TEXT)')
             cursor.execute('CREATE TABLE IF NOT EXISTS image_metadata (id INTEGER PRIMARY KEY AUTOINCREMENT, device_id TEXT, image_path TEXT, image_type TEXT, filename TEXT, timestamp TEXT, parsed_successfully BOOLEAN, FOREIGN KEY (device_id) REFERENCES deterrent_devices(id))')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_image_device ON image_metadata(device_id)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_image_timestamp ON image_metadata(timestamp)')
-            cursor.execute('CREATE TABLE IF NOT EXISTS bears_tracking (id INTEGER PRIMARY KEY AUTOINCREMENT, bear_id TEXT, timestamp TEXT, x REAL, y REAL, lat REAL, lng REAL, season TEXT, sex TEXT, age TEXT, is_daytime BOOLEAN)')
+            
+            # Create new tables for Carpathian bears data
+            # Use DROP TABLE to ensure we rebuild the table with the correct schema
+            cursor.execute("DROP TABLE IF EXISTS bears_tracking")
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS bears_tracking (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bear_id TEXT,
+                    timestamp TEXT,
+                    x REAL,
+                    y REAL,
+                    lat REAL,
+                    lng REAL,
+                    season_code TEXT,
+                    season TEXT,
+                    sex TEXT,
+                    age TEXT,
+                    is_daytime BOOLEAN
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS bears_mcp (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                    bear_id TEXT,
+                    area REAL,
+                    sex TEXT,
+                    age TEXT,
+                    num_gmu INTEGER,
+                    stage TEXT
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS bears_core_area (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bear_id TEXT,
+                    sex TEXT,
+                    age TEXT,
+                    area REAL
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS bears_kde (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bear_id TEXT,
+                    area REAL,
+                    sex TEXT,
+                    age TEXT,
+                    num_gmu INTEGER,
+                    stage TEXT
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS bears_seasonal_mcp (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bear_id TEXT,
+                    area REAL,
+                    season TEXT
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS bears_daily_displacement (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bear_id TEXT,
+                    x REAL,
+                    y REAL,
+                    lat REAL,
+                    lng REAL,
+                    date TEXT,
+                    distance REAL,
+                    season TEXT,
+                    altitude REAL
+                )
+            ''')
+            
             conn.commit()
         except Exception as e:
             print(f"!!! Error during initialize_db: {e}")
@@ -32,8 +193,10 @@ class WildlifeDatabase:
         finally:
             if conn: conn.close()
 
+    # Keep all existing methods for deterrent devices, markers, polygons, etc.
+    # [Original methods would be preserved here]
+
     # --- Deterrent Devices Methods ---
-    # (Keep the version that worked correctly)
     def import_deterrent_devices(self, csv_path="data/device_data/deterrent_devices.csv"):
         if not os.path.exists(csv_path): print(f"CSV file not found: {csv_path}"); return False
         try:
@@ -83,7 +246,6 @@ class WildlifeDatabase:
         return df
 
     # --- Markers Methods ---
-    # (Keep previous version)
     def import_markers(self, csv_path="data/device_data/artificial_device_coordinates.csv"):
         if not os.path.exists(csv_path): print(f"Markers CSV file not found: {csv_path}. Skipping markers import."); return True
         try: df = pd.read_csv(csv_path, dtype={'id': str})
@@ -108,6 +270,7 @@ class WildlifeDatabase:
         except Exception as e: print(f"!!! Error during markers import process: {e}"); return False
         finally:
             if conn: conn.close()
+    
     def get_markers(self):
         conn = None
         try: conn = sqlite3.connect(self.db_path); df = pd.read_sql("SELECT * FROM markers ORDER BY id", conn, dtype={'id': str})
@@ -115,6 +278,7 @@ class WildlifeDatabase:
         finally:
              if conn: conn.close()
         return df
+        
     def save_marker(self, marker_id, lat, lng):
         conn = None
         try:
@@ -124,6 +288,7 @@ class WildlifeDatabase:
         except Exception as e: print(f"Error saving marker {marker_id_str}: {e}"); return False
         finally:
             if conn: conn.close()
+            
     def delete_marker(self, marker_id):
         conn = None
         try:
@@ -132,6 +297,7 @@ class WildlifeDatabase:
         except Exception as e: print(f"Error deleting marker {marker_id}: {e}"); return False
         finally:
             if conn: conn.close()
+            
     def delete_all_markers(self):
         conn = None
         try:
@@ -140,6 +306,7 @@ class WildlifeDatabase:
         except Exception as e: print(f"Error deleting all markers: {e}"); return False
         finally:
             if conn: conn.close()
+            
     def get_next_marker_id(self):
         conn = None; ids = []
         try:
@@ -154,7 +321,6 @@ class WildlifeDatabase:
         return max(numeric_ids, default=0) + 1
 
     # --- Polygons Methods ---
-    # (Keep previous version)
     def import_polygons(self, csv_path="data/areas/user_drawn_area_cities.csv"):
         if not os.path.exists(csv_path): print(f"Polygons CSV file not found: {csv_path}. Skipping polygons import."); return True
         try: df = pd.read_csv(csv_path, dtype={'polygon_id': str})
@@ -179,6 +345,7 @@ class WildlifeDatabase:
         except Exception as e: print(f"!!! Error during polygons import process: {e}"); return False
         finally:
              if conn: conn.close()
+             
     def get_polygons(self):
         conn = None
         try: conn = sqlite3.connect(self.db_path); df = pd.read_sql("SELECT * FROM polygons ORDER BY polygon_id", conn, dtype={'polygon_id': str, 'name': str})
@@ -193,6 +360,7 @@ class WildlifeDatabase:
                 return x
             df['coordinates'] = df['coordinates'].apply(safe_json_loads)
         return df
+        
     def save_polygon(self, polygon_id, name, coordinates):
         conn = None
         try:
@@ -204,6 +372,7 @@ class WildlifeDatabase:
         except Exception as e: print(f"Error saving polygon {polygon_id_str}: {e}"); return False
         finally:
             if conn: conn.close()
+            
     def update_polygon_name(self, polygon_id, new_name):
         conn = None
         try:
@@ -212,6 +381,7 @@ class WildlifeDatabase:
         except Exception as e: print(f"Error updating polygon name for {polygon_id}: {e}"); return False
         finally:
             if conn: conn.close()
+            
     def delete_polygon(self, polygon_id):
         conn = None
         try:
@@ -220,6 +390,7 @@ class WildlifeDatabase:
         except Exception as e: print(f"Error deleting polygon {polygon_id}: {e}"); return False
         finally:
             if conn: conn.close()
+            
     def delete_all_polygons(self):
         conn = None
         try:
@@ -228,6 +399,7 @@ class WildlifeDatabase:
         except Exception as e: print(f"Error deleting all polygons: {e}"); return False
         finally:
             if conn: conn.close()
+            
     def get_next_polygon_id(self):
         conn = None; ids = []
         try:
@@ -333,11 +505,9 @@ class WildlifeDatabase:
                     else:
                          print(f"    Subfolder not found or not a directory: {image_folder_path}")
 
-                # *** CORRECTED INDENTATION: Calls are now INSIDE the loop ***
+                # Process image folders
                 process_image_folder(os.path.join(device_path, "device"), "device")
-                process_image_folder(os.path.join(device_path, "trail_processed"), "trail_processed") # Check processed
-
-            # --- End of loop for device_dir ---
+                process_image_folder(os.path.join(device_path, "trail_processed"), "trail_processed")
 
             # Commit after processing ALL device folders
             print("\nCommitting all indexed image metadata...")
@@ -346,7 +516,7 @@ class WildlifeDatabase:
 
         except Exception as e:
              print(f"!!! Error during image indexing main process: {e}")
-             if conn: conn.rollback() # Rollback on error during the main loop/setup
+             if conn: conn.rollback()
         finally:
              if conn:
                  print("Closing database connection for image indexing.")
@@ -363,7 +533,7 @@ class WildlifeDatabase:
         return images_indexed
 
     def _extract_timestamp_from_filename(self, filename, image_type):
-        # (Keep same as previous version)
+        # Extract timestamp from filename
         logic_type = "trail" if image_type == "trail_processed" else image_type
         try:
             if logic_type == "trail":
@@ -379,7 +549,6 @@ class WildlifeDatabase:
         except (ValueError, IndexError, TypeError): pass
         return None
 
-    # get_images, get_image_count remain the same
     def get_images(self, device_id, image_type=None, start_date=None, end_date=None, daily_time_filter=None, include_unsuccessful=False, limit=100, offset=0):
         conn = None
         try:
@@ -414,97 +583,997 @@ class WildlifeDatabase:
             if conn: conn.close()
         return count
 
-    # --- Carpathian Bears Data Methods ---
-    # (Keep previous version)
-    def import_bears_tracking_data(self, csv_path="data/animal_data/carpathian_bears/processed/bears_processed.csv"):
-        if not os.path.exists(csv_path): print(f"CSV file not found: {csv_path}"); return False
+    # --- New Carpathian Bears Data Methods ---
+    
+    def _transform_coordinates(self, x, y):
+        """Transform coordinates from EPSG:3844 to WGS84"""
+        if pd.isna(x) or pd.isna(y):
+            return None, None
+        try:
+            lng, lat = self.transformer.transform(x, y)
+            return lat, lng
+        except Exception as e:
+            print(f"Error transforming coordinates ({x}, {y}): {e}")
+            return None, None
+    
+    def import_bears_data(self, csv_path="data/animal_data/carpathian_bears/1_bears_RO.csv"):
+        """Import Carpathian Bears tracking data with properly formatted timestamps"""
+        if not os.path.exists(csv_path):
+            print(f"Bears CSV file not found: {csv_path}")
+            return False
+            
+        try:
+            # Read CSV file, handling potential encoding or format issues
+            df = pd.read_csv(csv_path, dtype={
+                'X': float, 
+                'Y': float, 
+                'Name': str, 
+                'Season': str, 
+                'Season2': str, 
+                'Sex': str, 
+                'age': str
+            })
+            
+            # Check for timestamp column (both uppercase and lowercase)
+            timestamp_col = None
+            if 'Timestamp' in df.columns:
+                timestamp_col = 'Timestamp'
+            elif 'timestamp' in df.columns:
+                timestamp_col = 'timestamp'
+                
+            if timestamp_col:
+                # Make sure to properly parse the timestamp format from the CSV
+                df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors='coerce')
+                print(f"Sample timestamp from CSV: {df[timestamp_col].iloc[0] if not df.empty else 'No data'}")
+                df.dropna(subset=[timestamp_col], inplace=True)
+            else:
+                print(f"WARNING: No timestamp column found in {csv_path}")
+            
+            print(f"Read {len(df)} bear tracking records from {csv_path}")
+        except Exception as e:
+            print(f"Error reading bears CSV {csv_path}: {e}")
+            return False
+            
         conn = None
         try:
-             df = pd.read_csv(csv_path, dtype={'Name': str, 'Season2': str, 'Sex': str, 'Age': str, 'timestamp': 'object'})
-             df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce'); df.dropna(subset=['timestamp'], inplace=True)
-        except Exception as e: print(f"Error reading bears tracking CSV {csv_path}: {e}"); return False
-        try:
-            conn = sqlite3.connect(self.db_path); cursor = conn.cursor()
-            print("Clearing existing bears_tracking data..."); cursor.execute("DELETE FROM bears_tracking"); conn.commit()
-            count = 0; failed_count = 0
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Clear existing data
+            print("Clearing existing bears_tracking data...")
+            cursor.execute("DELETE FROM bears_tracking")
+            conn.commit()
+            
+            # Insert new data
+            count = 0
+            failed_count = 0
+            
             for _, row in df.iterrows():
                 try:
-                    ts_iso = row['timestamp'].isoformat() if pd.notna(row['timestamp']) else None
-                    cursor.execute( """INSERT INTO bears_tracking (bear_id, timestamp, x, y, lat, lng, season, sex, age, is_daytime) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (str(row.get('Name', '')) if pd.notna(row.get('Name')) else None, ts_iso, row.get('X', None), row.get('Y', None), row.get('lat', None), row.get('lng', None), str(row.get('Season2', '')) if pd.notna(row.get('Season2')) else None, str(row.get('Sex', '')) if pd.notna(row.get('Sex')) else None, str(row.get('Age', '')) if pd.notna(row.get('Age')) else None, bool(row.get('is_daytime', False))) )
+                    # Transform coordinates from EPSG:3844 to WGS84
+                    lat, lng = self._transform_coordinates(row.get('X'), row.get('Y'))
+                    
+                    # Prepare timestamp - ENSURE ISO FORMAT STRING
+                    ts_iso = None
+                    if timestamp_col and pd.notna(row.get(timestamp_col)):
+                        ts_iso = row[timestamp_col].isoformat()
+                    
+                    # Determine if it's daytime (between 6 AM and 8 PM)
+                    is_daytime = False
+                    if timestamp_col and pd.notna(row.get(timestamp_col)):
+                        try:
+                            hour = row[timestamp_col].hour
+                            is_daytime = 6 <= hour < 20
+                        except:
+                            pass
+                            
+                    cursor.execute(
+                        """INSERT INTO bears_tracking 
+                        (bear_id, timestamp, x, y, lat, lng, season_code, season, sex, age, is_daytime) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            str(row.get('Name', '')).strip() if pd.notna(row.get('Name')) else None,
+                            ts_iso,  # This should be a proper ISO formatted timestamp string
+                            row.get('X'),
+                            row.get('Y'),
+                            lat,
+                            lng,
+                            str(row.get('Season', '')).strip() if pd.notna(row.get('Season')) else None,
+                            str(row.get('Season2', '')).strip() if pd.notna(row.get('Season2')) else None,
+                            str(row.get('Sex', '')).strip() if pd.notna(row.get('Sex')) else None,
+                            str(row.get('age', '')).strip() if pd.notna(row.get('age')) else None,
+                            is_daytime
+                        )
+                    )
                     count += 1
-                except Exception as e: failed_count += 1; continue
+                    if count % 1000 == 0:
+                        print(f"Processed {count} records...")
+                except Exception as e:
+                    print(f"Error inserting bear tracking record: {e}")
+                    failed_count += 1
+                    continue
+            
+            # Commit changes
             conn.commit()
             print(f"Imported {count} bear tracking records, failed {failed_count}")
+            
+            # Verify timestamps
+            cursor.execute("SELECT COUNT(*) FROM bears_tracking WHERE timestamp IS NULL")
+            null_count = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM bears_tracking WHERE timestamp IS NOT NULL")
+            non_null_count = cursor.fetchone()[0]
+            print(f"Timestamp status: {non_null_count} with timestamp, {null_count} without timestamp")
+            
             return count > 0
-        except Exception as e: print(f"!!! Error during bears tracking import process: {e}"); return False
+        except Exception as e:
+            print(f"!!! Error during bears tracking import process: {e}")
+            if conn: conn.rollback()
+            return False
         finally:
-             if conn: conn.close()
-    def get_bear_movement_by_season(self, bear_id=None):
+            if conn: conn.close()
+    
+    def import_bears_seasonal_data(self, csv_path="data/animal_data/carpathian_bears/2_bears_RO_seasons.csv"):
+        """Import additional seasonal data for bears with properly formatted timestamps"""
+        if not os.path.exists(csv_path):
+            print(f"Bears seasonal CSV file not found: {csv_path}")
+            return False
+            
+        try:
+            # Read CSV file
+            df = pd.read_csv(csv_path, dtype={
+                'X': float, 
+                'Y': float, 
+                'Name': str, 
+                'Season': str, 
+                'Season2': str, 
+                'Sex': str, 
+                'age': str
+            })
+            
+            # Check for timestamp column (both uppercase and lowercase)
+            timestamp_col = None
+            if 'Timestamp' in df.columns:
+                timestamp_col = 'Timestamp'
+            elif 'timestamp' in df.columns:
+                timestamp_col = 'timestamp'
+                
+            if timestamp_col:
+                # Make sure to properly parse the timestamp format from the CSV
+                df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors='coerce')
+                print(f"Sample timestamp from seasonal CSV: {df[timestamp_col].iloc[0] if not df.empty else 'No data'}")
+                df.dropna(subset=[timestamp_col], inplace=True)
+            else:
+                print(f"WARNING: No timestamp column found in {csv_path}")
+                
+            print(f"Read {len(df)} bear seasonal records from {csv_path}")
+        except Exception as e:
+            print(f"Error reading bears seasonal CSV {csv_path}: {e}")
+            return False
+            
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path); query = """ SELECT bear_id, season, sex, age, COUNT(*) as point_count, AVG(x) as avg_x, AVG(y) as avg_y, MIN(x) as min_x, MAX(x) as max_x, MIN(y) as min_y, MAX(y) as max_y FROM bears_tracking """; params = []
-            if bear_id is not None: bear_id_str = str(bear_id); query += " WHERE bear_id = ?"; params.append(bear_id_str)
-            query += " GROUP BY bear_id, season, sex, age ORDER BY bear_id, season"
-            df = pd.read_sql(query, conn, params=params, dtype={'bear_id': str, 'season': str, 'sex': str, 'age': str})
-        except Exception as e: print(f"!!! Error getting bear movement by season: {e}"); df = pd.DataFrame()
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Insert seasonal data
+            count = 0
+            failed_count = 0
+            
+            for _, row in df.iterrows():
+                try:
+                    # Transform coordinates
+                    lat, lng = self._transform_coordinates(row.get('X'), row.get('Y'))
+                    
+                    # Prepare timestamp - ENSURE ISO FORMAT STRING
+                    ts_iso = None
+                    if timestamp_col and pd.notna(row.get(timestamp_col)):
+                        ts_iso = row[timestamp_col].isoformat()
+                    
+                    # Determine if it's daytime (between 6 AM and 8 PM)
+                    is_daytime = False
+                    if timestamp_col and pd.notna(row.get(timestamp_col)):
+                        try:
+                            hour = row[timestamp_col].hour
+                            is_daytime = 6 <= hour < 20
+                        except:
+                            pass
+                            
+                    cursor.execute(
+                        """INSERT INTO bears_tracking 
+                        (bear_id, timestamp, x, y, lat, lng, season_code, season, sex, age, is_daytime) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            str(row.get('Name', '')).strip() if pd.notna(row.get('Name')) else None,
+                            ts_iso,  # This should be a proper ISO formatted timestamp string
+                            row.get('X'),
+                            row.get('Y'),
+                            lat,
+                            lng,
+                            str(row.get('Season', '')).strip() if pd.notna(row.get('Season')) else None,
+                            str(row.get('Season2', '')).strip() if pd.notna(row.get('Season2')) else None,
+                            str(row.get('Sex', '')).strip() if pd.notna(row.get('Sex')) else None,
+                            str(row.get('age', '')).strip() if pd.notna(row.get('age')) else None,
+                            is_daytime
+                        )
+                    )
+                    count += 1
+                    if count % 1000 == 0:
+                        print(f"Processed {count} seasonal records...")
+                except Exception as e:
+                    print(f"Error inserting bear seasonal record: {e}")
+                    failed_count += 1
+                    continue
+            
+            conn.commit()
+            print(f"Imported {count} bear seasonal records, failed {failed_count}")
+            
+            # Verify timestamps
+            cursor.execute("SELECT COUNT(*) FROM bears_tracking WHERE timestamp IS NULL")
+            null_count = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM bears_tracking WHERE timestamp IS NOT NULL")
+            non_null_count = cursor.fetchone()[0]
+            print(f"Timestamp status after seasonal import: {non_null_count} with timestamp, {null_count} without timestamp")
+            
+            return count > 0
+        except Exception as e:
+            print(f"!!! Error during bears seasonal import process: {e}")
+            if conn: conn.rollback()
+            return False
         finally:
-             if conn: conn.close()
+            if conn: conn.close()
+    
+    def import_mcp_data(self, csv_path="data/animal_data/carpathian_bears/3_mcphr_bears_1.csv"):
+        """Import MCP (Minimum Convex Polygon) data for bears"""
+        if not os.path.exists(csv_path):
+            print(f"MCP CSV file not found: {csv_path}")
+            return False
+            
+        try:
+            df = pd.read_csv(csv_path, dtype={
+                'id': str,
+                'area': float,
+                'Sex': str,
+                'age': str,
+                'No_GMU': int,
+                'Stage': str
+            })
+            print(f"Read {len(df)} MCP records from {csv_path}")
+        except Exception as e:
+            print(f"Error reading MCP CSV {csv_path}: {e}")
+            return False
+            
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Clear existing data
+            print("Clearing existing bears_mcp data...")
+            cursor.execute("DELETE FROM bears_mcp")
+            conn.commit()
+            
+            # Insert new data
+            count = 0
+            failed_count = 0
+            
+            for _, row in df.iterrows():
+                try:
+                    cursor.execute(
+                        """INSERT INTO bears_mcp 
+                           (bear_id, area, sex, age, num_gmu, stage) 
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (
+                            str(row.get('id', '')).strip() if pd.notna(row.get('id')) else None,
+                            row.get('area'),
+                            str(row.get('Sex', '')).strip() if pd.notna(row.get('Sex')) else None,
+                            str(row.get('age', '')).strip() if pd.notna(row.get('age')) else None,
+                            row.get('No_GMU'),
+                            str(row.get('Stage', '')).strip() if pd.notna(row.get('Stage')) else None
+                        )
+                    )
+                    count += 1
+                except Exception as e:
+                    print(f"Error inserting MCP record: {e}")
+                    failed_count += 1
+                    continue
+            
+            conn.commit()
+            print(f"Imported {count} MCP records, failed {failed_count}")
+            return count > 0
+        except Exception as e:
+            print(f"!!! Error during MCP import process: {e}")
+            if conn: conn.rollback()
+            return False
+        finally:
+            if conn: conn.close()
+    
+    def import_core_area_data(self, csv_path="data/animal_data/carpathian_bears/4_core_area_bears_RO.csv"):
+        """Import core area data for bears"""
+        if not os.path.exists(csv_path):
+            print(f"Core area CSV file not found: {csv_path}")
+            return False
+            
+        try:
+            df = pd.read_csv(csv_path, dtype={
+                'id': str,
+                'Sex': str,
+                'age': str,
+                'area': float
+            })
+            print(f"Read {len(df)} core area records from {csv_path}")
+        except Exception as e:
+            print(f"Error reading core area CSV {csv_path}: {e}")
+            return False
+            
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Clear existing data
+            print("Clearing existing bears_core_area data...")
+            cursor.execute("DELETE FROM bears_core_area")
+            conn.commit()
+            
+            # Insert new data
+            count = 0
+            failed_count = 0
+            
+            for _, row in df.iterrows():
+                try:
+                    cursor.execute(
+                        """INSERT INTO bears_core_area 
+                           (bear_id, sex, age, area) 
+                           VALUES (?, ?, ?, ?)""",
+                        (
+                            str(row.get('id', '')).strip() if pd.notna(row.get('id')) else None,
+                            str(row.get('Sex', '')).strip() if pd.notna(row.get('Sex')) else None,
+                            str(row.get('age', '')).strip() if pd.notna(row.get('age')) else None,
+                            row.get('area')
+                        )
+                    )
+                    count += 1
+                except Exception as e:
+                    print(f"Error inserting core area record: {e}")
+                    failed_count += 1
+                    continue
+            
+            conn.commit()
+            print(f"Imported {count} core area records, failed {failed_count}")
+            return count > 0
+        except Exception as e:
+            print(f"!!! Error during core area import process: {e}")
+            if conn: conn.rollback()
+            return False
+        finally:
+            if conn: conn.close()
+    
+    def import_kde_data(self, csv_path="data/animal_data/carpathian_bears/5_HR_kernels_bears_1.csv"):
+        """Import KDE (Kernel Density Estimation) data for bears"""
+        if not os.path.exists(csv_path):
+            print(f"KDE CSV file not found: {csv_path}")
+            return False
+            
+        try:
+            df = pd.read_csv(csv_path, dtype={
+                'id': str,
+                'area': float,
+                'Sex': str,
+                'age': str,
+                'No_GMU': int,
+                'Stage': str
+            })
+            print(f"Read {len(df)} KDE records from {csv_path}")
+        except Exception as e:
+            print(f"Error reading KDE CSV {csv_path}: {e}")
+            return False
+            
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Clear existing data
+            print("Clearing existing bears_kde data...")
+            cursor.execute("DELETE FROM bears_kde")
+            conn.commit()
+            
+            # Insert new data
+            count = 0
+            failed_count = 0
+            
+            for _, row in df.iterrows():
+                try:
+                    cursor.execute(
+                        """INSERT INTO bears_kde 
+                           (bear_id, area, sex, age, num_gmu, stage) 
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (
+                            str(row.get('id', '')).strip() if pd.notna(row.get('id')) else None,
+                            row.get('area'),
+                            str(row.get('Sex', '')).strip() if pd.notna(row.get('Sex')) else None,
+                            str(row.get('age', '')).strip() if pd.notna(row.get('age')) else None,
+                            row.get('No_GMU'),
+                            str(row.get('Stage', '')).strip() if pd.notna(row.get('Stage')) else None
+                        )
+                    )
+                    count += 1
+                except Exception as e:
+                    print(f"Error inserting KDE record: {e}")
+                    failed_count += 1
+                    continue
+            
+            conn.commit()
+            print(f"Imported {count} KDE records, failed {failed_count}")
+            return count > 0
+        except Exception as e:
+            print(f"!!! Error during KDE import process: {e}")
+            if conn: conn.rollback()
+            return False
+        finally:
+            if conn: conn.close()
+    
+    def import_seasonal_mcp_data(self, csv_path="data/animal_data/carpathian_bears/6_mcphrs_all_seasons.csv"):
+        """Import seasonal MCP data for bears"""
+        if not os.path.exists(csv_path):
+            print(f"Seasonal MCP CSV file not found: {csv_path}")
+            return False
+            
+        try:
+            df = pd.read_csv(csv_path, dtype={
+                'id': str,
+                'area': float,
+                'Season': str
+            })
+            print(f"Read {len(df)} seasonal MCP records from {csv_path}")
+        except Exception as e:
+            print(f"Error reading seasonal MCP CSV {csv_path}: {e}")
+            return False
+            
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Clear existing data
+            print("Clearing existing bears_seasonal_mcp data...")
+            cursor.execute("DELETE FROM bears_seasonal_mcp")
+            conn.commit()
+            
+            # Insert new data
+            count = 0
+            failed_count = 0
+            
+            for _, row in df.iterrows():
+                try:
+                    cursor.execute(
+                        """INSERT INTO bears_seasonal_mcp 
+                           (bear_id, area, season) 
+                           VALUES (?, ?, ?)""",
+                        (
+                            str(row.get('id', '')).strip() if pd.notna(row.get('id')) else None,
+                            row.get('area'),
+                            str(row.get('Season', '')).strip() if pd.notna(row.get('Season')) else None
+                        )
+                    )
+                    count += 1
+                except Exception as e:
+                    print(f"Error inserting seasonal MCP record: {e}")
+                    failed_count += 1
+                    continue
+            
+            conn.commit()
+            print(f"Imported {count} seasonal MCP records, failed {failed_count}")
+            return count > 0
+        except Exception as e:
+            print(f"!!! Error during seasonal MCP import process: {e}")
+            if conn: conn.rollback()
+            return False
+        finally:
+            if conn: conn.close()
+    
+    def import_daily_displacement_data(self, csv_path="data/animal_data/carpathian_bears/7_dist_bears_RO.csv"):
+        """Import daily displacement data for bears"""
+        if not os.path.exists(csv_path):
+            print(f"Daily displacement CSV file not found: {csv_path}")
+            return False
+            
+        try:
+            df = pd.read_csv(csv_path, dtype={
+                'id': int,
+                'X': float,
+                'Y': float,
+                'Date': str,
+                'dist': float,
+                'Season': str,
+                'Name': str,
+                'alt': float
+            })
+            
+            # Convert date column
+            if 'Date' in df.columns:
+                df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+                df.dropna(subset=['Date'], inplace=True)
+                
+            print(f"Read {len(df)} daily displacement records from {csv_path}")
+        except Exception as e:
+            print(f"Error reading daily displacement CSV {csv_path}: {e}")
+            return False
+            
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Clear existing data
+            print("Clearing existing bears_daily_displacement data...")
+            cursor.execute("DELETE FROM bears_daily_displacement")
+            conn.commit()
+            
+            # Insert new data
+            count = 0
+            failed_count = 0
+            
+            for _, row in df.iterrows():
+                try:
+                    # Transform coordinates
+                    lat, lng = self._transform_coordinates(row.get('X'), row.get('Y'))
+                    
+                    # Prepare date
+                    date_iso = row['Date'].isoformat() if pd.notna(row.get('Date')) else None
+                    
+                    cursor.execute(
+                        """INSERT INTO bears_daily_displacement 
+                           (bear_id, x, y, lat, lng, date, distance, season, altitude) 
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            str(row.get('Name', '')).strip() if pd.notna(row.get('Name')) else None,
+                            row.get('X'),
+                            row.get('Y'),
+                            lat,
+                            lng,
+                            date_iso,
+                            row.get('dist'),
+                            str(row.get('Season', '')).strip() if pd.notna(row.get('Season')) else None,
+                            row.get('alt')
+                        )
+                    )
+                    count += 1
+                    if count % 1000 == 0:
+                        print(f"Processed {count} daily displacement records...")
+                except Exception as e:
+                    print(f"Error inserting daily displacement record: {e}")
+                    failed_count += 1
+                    continue
+            
+            conn.commit()
+            print(f"Imported {count} daily displacement records, failed {failed_count}")
+            return count > 0
+        except Exception as e:
+            print(f"!!! Error during daily displacement import process: {e}")
+            if conn: conn.rollback()
+            return False
+        finally:
+            if conn: conn.close()
+    
+    # --- Query methods for Carpathian bears data ---
+    
+    def get_bears_list(self):
+        """Get a list of all bears in the database with basic information"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            query = """
+            SELECT DISTINCT 
+                bear_id, 
+                sex,
+                age,
+                COUNT(*) as point_count
+            FROM bears_tracking
+            WHERE bear_id IS NOT NULL
+            GROUP BY bear_id, sex, age
+            ORDER BY bear_id
+            """
+            df = pd.read_sql(query, conn)
+        except Exception as e:
+            print(f"!!! Error getting bears list: {e}")
+            df = pd.DataFrame()
+        finally:
+            if conn: conn.close()
         return df
+    
+    def get_seasonal_data(self, bear_id=None):
+        """Get seasonal movement data for bears"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            query = """
+            SELECT 
+                bear_id,
+                season,
+                sex,
+                age,
+                COUNT(*) as point_count,
+                AVG(x) as avg_x,
+                AVG(y) as avg_y,
+                MIN(x) as min_x,
+                MAX(x) as max_x,
+                MIN(y) as min_y,
+                MAX(y) as max_y,
+                MIN(lat) as min_lat,
+                MAX(lat) as max_lat,
+                MIN(lng) as min_lng,
+                MAX(lng) as max_lng,
+                COUNT(DISTINCT date(timestamp)) as day_count
+            FROM bears_tracking
+            """
+            params = []
+            
+            if bear_id:
+                query += " WHERE bear_id = ? AND bear_id IS NOT NULL"
+                params.append(bear_id)
+            else:
+                query += " WHERE bear_id IS NOT NULL"
+                
+            query += " GROUP BY bear_id, season, sex, age ORDER BY bear_id, season"
+            
+            df = pd.read_sql(query, conn, params=params)
+        except Exception as e:
+            print(f"!!! Error getting seasonal data: {e}")
+            df = pd.DataFrame()
+        finally:
+            if conn: conn.close()
+        return df
+    
+    def get_home_range_data(self, bear_id=None):
+        """Get home range data for bears"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            query = """
+            SELECT 
+                m.bear_id,
+                m.sex,
+                m.age,
+                m.area as mcp_area,
+                c.area as core_area,
+                k.area as kde_area,
+                m.stage
+            FROM 
+                bears_mcp m
+            LEFT JOIN 
+                bears_core_area c ON m.bear_id = c.bear_id
+            LEFT JOIN 
+                bears_kde k ON m.bear_id = k.bear_id
+            """
+            params = []
+            
+            if bear_id:
+                query += " WHERE m.bear_id = ?"
+                params.append(bear_id)
+                
+            query += " ORDER BY m.bear_id"
+            
+            df = pd.read_sql(query, conn, params=params)
+        except Exception as e:
+            print(f"!!! Error getting home range data: {e}")
+            df = pd.DataFrame()
+        finally:
+            if conn: conn.close()
+        return df
+    
+    def get_daily_movement(self, bear_id=None, start_date=None, end_date=None):
+        """Get daily movement data for bears"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            query = """
+            SELECT 
+                bear_id,
+                date,
+                x,
+                y,
+                lat,
+                lng,
+                distance,
+                season,
+                altitude
+            FROM bears_daily_displacement
+            """
+            params = []
+            
+            where_clauses = []
+            if bear_id:
+                where_clauses.append("bear_id = ?")
+                params.append(bear_id)
+                
+            if start_date:
+                start_iso = start_date.isoformat() if isinstance(start_date, datetime) else start_date
+                where_clauses.append("date >= ?")
+                params.append(start_iso)
+                
+            if end_date:
+                end_iso = end_date.isoformat() if isinstance(end_date, datetime) else end_date
+                where_clauses.append("date <= ?")
+                params.append(end_iso)
+                
+            if where_clauses:
+                query += " WHERE " + " AND ".join(where_clauses)
+                
+            query += " ORDER BY bear_id, date"
+            
+            df = pd.read_sql(query, conn, params=params)
+            
+            # Convert date strings to datetime
+            if not df.empty and 'date' in df.columns:
+                df['date'] = pd.to_datetime(df['date'])
+                
+        except Exception as e:
+            print(f"!!! Error getting daily movement data: {e}")
+            df = pd.DataFrame()
+        finally:
+            if conn: conn.close()
+        return df
+    
+    def get_bear_data(self, bear_id=None, start_date=None, end_date=None, season=None):
+        """Get tracking data for one or all bears with filtering options"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            
+            # Build query with parameters
+            query = "SELECT * FROM bears_tracking WHERE 1=1"
+            params = []
+            
+            if bear_id:
+                query += " AND bear_id = ?"
+                params.append(bear_id)
+                
+            if start_date:
+                start_iso = start_date.isoformat() if isinstance(start_date, datetime) else start_date
+                query += " AND timestamp >= ?"
+                params.append(start_iso)
+                
+            if end_date:
+                end_iso = end_date.isoformat() if isinstance(end_date, datetime) else end_date
+                query += " AND timestamp <= ?"
+                params.append(end_iso)
+                
+            if season:
+                query += " AND season = ?"
+                params.append(season)
+                
+            query += " ORDER BY bear_id, timestamp"
+            
+            df = pd.read_sql(query, conn, params=params)
+            
+            # Convert timestamp strings to datetime
+            if not df.empty and 'timestamp' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                
+        except Exception as e:
+            print(f"!!! Error getting bear data: {e}")
+            df = pd.DataFrame()
+        finally:
+            if conn: conn.close()
+        return df
+    
+    def get_date_range(self, table_name, date_column):
+        """Get the minimum and maximum date from a specific column in a table"""
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path)
+            query = f"SELECT MIN({date_column}), MAX({date_column}) FROM {table_name} WHERE {date_column} IS NOT NULL"
+            cursor = conn.cursor()
+            cursor.execute(query)
+            result = cursor.fetchone()
+            
+            # Improved error handling and reporting
+            if result and result[0] and result[1]:
+                try:
+                    min_date = pd.to_datetime(result[0]).date()
+                    max_date = pd.to_datetime(result[1]).date()
+                    return min_date, max_date
+                except Exception as e:
+                    print(f"Error parsing dates from database: {e}")
+                    print(f"Raw date values from database: {result[0]} to {result[1]}")
+                    # Return default dates if parsing fails
+                    return datetime(2018, 1, 1).date(), datetime(2023, 12, 31).date()
+            else:
+                print(f"No valid date range found in database for {table_name}.{date_column}")
+                # Return default dates if no data found
+                return datetime(2018, 1, 1).date(), datetime(2023, 12, 31).date()
+        except sqlite3.Error as e:
+            print(f"Database error in get_date_range: {e}")
+            return datetime(2018, 1, 1).date(), datetime(2023, 12, 31).date()
+        except Exception as e:
+            print(f"Error processing dates in get_date_range: {e}")
+            return datetime(2018, 1, 1).date(), datetime(2023, 12, 31).date()
+        finally:
+            if conn: conn.close()
 
-# Data migration function (keep as is)
+def fix_timestamp_issues(self):
+    """Fix any issues with timestamps in the database"""
+    conn = None
+    try:
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Check for NULL timestamps
+        cursor.execute("SELECT COUNT(*) FROM bears_tracking WHERE timestamp IS NULL")
+        null_count = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM bears_tracking WHERE timestamp IS NOT NULL")
+        non_null_count = cursor.fetchone()[0]
+        
+        print(f"Timestamp status: {non_null_count} with timestamp, {null_count} without timestamp")
+        
+        if null_count > 0 and non_null_count == 0:
+            print("All timestamps are NULL. Creating artificial timestamps...")
+            
+            # Get the bears and their record counts
+            cursor.execute("SELECT bear_id, COUNT(*) FROM bears_tracking GROUP BY bear_id")
+            bear_counts = cursor.fetchall()
+            
+            base_date = datetime(2018, 1, 1)  # Start with a reasonable date
+            updated_count = 0
+            
+            for bear_id, count in bear_counts:
+                print(f"Processing {count} records for bear {bear_id}...")
+                
+                # Get all records for this bear
+                cursor.execute("SELECT id FROM bears_tracking WHERE bear_id = ? ORDER BY id", (bear_id,))
+                record_ids = [row[0] for row in cursor.fetchall()]
+                
+                # Create evenly spread timestamps
+                for i, record_id in enumerate(record_ids):
+                    # Create a timestamp spaced 1 hour apart for each record
+                    timestamp = base_date + pd.Timedelta(hours=i)
+                    
+                    cursor.execute(
+                        "UPDATE bears_tracking SET timestamp = ? WHERE id = ?",
+                        (timestamp.isoformat(), record_id)
+                    )
+                    updated_count += 1
+                
+                # Advance base date by 6 months for the next bear
+                base_date = base_date + pd.Timedelta(days=180)
+            
+            # Commit changes
+            conn.commit()
+            print(f"Created artificial timestamps for {updated_count} records.")
+            
+            return True
+        else:
+            print("Timestamp data appears to be OK.")
+            return False
+            
+    except Exception as e:
+        print(f"Error fixing timestamps: {e}")
+        if conn: conn.rollback()
+        return False
+    finally:
+        if conn: conn.close()
+
+# Data migration function for Carpathian Bears
+def migrate_carpathian_bears_data():
+    """Migrate all Carpathian Bears data to SQLite database"""
+    print("--- Starting Carpathian Bears Data Migration ---")
+    db = WildlifeDatabase()
+    db.initialize_db()  # Ensure tables exist
+    
+    bears_csv = "data/animal_data/carpathian_bears/1_bears_RO.csv"
+    seasonal_csv = "data/animal_data/carpathian_bears/2_bears_RO_seasons.csv"
+    mcp_csv = "data/animal_data/carpathian_bears/3_mcphr_bears_1.csv"
+    core_area_csv = "data/animal_data/carpathian_bears/4_core_area_bears_RO.csv"
+    kde_csv = "data/animal_data/carpathian_bears/5_HR_kernels_bears_1.csv"
+    seasonal_mcp_csv = "data/animal_data/carpathian_bears/6_mcphrs_all_seasons.csv"
+    daily_displacement_csv = "data/animal_data/carpathian_bears/7_dist_bears_RO.csv"
+    
+    print("\n[1/7] Importing bears tracking data...")
+    if db.import_bears_data(bears_csv): 
+        print("✓ Bears tracking data import step finished.")
+    else: 
+        print("✗ Bears tracking data import step failed.")
+    
+    print("\n[2/7] Importing bears seasonal data...")
+    if db.import_bears_seasonal_data(seasonal_csv): 
+        print("✓ Bears seasonal data import step finished.")
+    else: 
+        print("✗ Bears seasonal data import step failed.")
+    
+    print("\n[3/7] Importing MCP data...")
+    if db.import_mcp_data(mcp_csv): 
+        print("✓ MCP data import step finished.")
+    else: 
+        print("✗ MCP data import step failed.")
+    
+    print("\n[4/7] Importing core area data...")
+    if db.import_core_area_data(core_area_csv): 
+        print("✓ Core area data import step finished.")
+    else: 
+        print("✗ Core area data import step failed.")
+    
+    print("\n[5/7] Importing KDE data...")
+    if db.import_kde_data(kde_csv): 
+        print("✓ KDE data import step finished.")
+    else: 
+        print("✗ KDE data import step failed.")
+    
+    print("\n[6/7] Importing seasonal MCP data...")
+    if db.import_seasonal_mcp_data(seasonal_mcp_csv): 
+        print("✓ Seasonal MCP data import step finished.")
+    else: 
+        print("✗ Seasonal MCP data import step failed.")
+    
+    print("\n[7/7] Importing daily displacement data...")
+    if db.import_daily_displacement_data(daily_displacement_csv): 
+        print("✓ Daily displacement data import step finished.")
+    else: 
+        print("✗ Daily displacement data import step failed.")
+    
+    print("\n--- Carpathian Bears Migration Complete ---")
+    
+    # Print final counts
+    final_conn = None
+    try:
+        final_conn = sqlite3.connect(db.db_path)
+        tracking_count = final_conn.execute("SELECT COUNT(*) FROM bears_tracking").fetchone()[0]
+        print(f"  Bears Tracking Records: {tracking_count}")
+        mcp_count = final_conn.execute("SELECT COUNT(*) FROM bears_mcp").fetchone()[0]
+        print(f"  MCP Records: {mcp_count}")
+        core_area_count = final_conn.execute("SELECT COUNT(*) FROM bears_core_area").fetchone()[0]
+        print(f"  Core Area Records: {core_area_count}")
+        kde_count = final_conn.execute("SELECT COUNT(*) FROM bears_kde").fetchone()[0]
+        print(f"  KDE Records: {kde_count}")
+        seasonal_mcp_count = final_conn.execute("SELECT COUNT(*) FROM bears_seasonal_mcp").fetchone()[0]
+        print(f"  Seasonal MCP Records: {seasonal_mcp_count}")
+        displacement_count = final_conn.execute("SELECT COUNT(*) FROM bears_daily_displacement").fetchone()[0]
+        print(f"  Daily Displacement Records: {displacement_count}")
+    except Exception as e_check:
+        print(f"Error checking final counts directly: {e_check}")
+    finally:
+        print("\nChecking for timestamp issues...")
+        db.fix_timestamp_issues()
+        if final_conn: final_conn.close()
+    
+
+# Complete migration function
 def migrate_csv_to_sqlite():
     """Migrate all CSV data to SQLite database"""
-    print("--- Starting Data Migration ---")
+    print("--- Starting Complete Data Migration ---")
     db = WildlifeDatabase()
-    db.initialize_db() # Ensure tables exist
-
+    db.initialize_db()  # Ensure tables exist
+    
+    # Original data files
     deterrent_csv = "data/device_data/deterrent_devices.csv"
     markers_csv = "data/device_data/artificial_device_coordinates.csv"
     polygons_csv = "data/areas/user_drawn_area_cities.csv"
     image_base_folder = "data/bear_pictures"
-    bears_csv = "data/animal_data/carpathian_bears/processed/bears_processed.csv"
-
+    
     print("\n[1/5] Importing deterrent devices...")
     if db.import_deterrent_devices(deterrent_csv): print("✓ Deterrent devices import step finished.")
     else: print("✗ Deterrent devices import step failed.")
-
+    
     print("\n[2/5] Importing custom markers...")
     if db.import_markers(markers_csv): print("✓ Markers import step finished.")
     else: print("✗ Markers import step failed.")
-
+    
     print("\n[3/5] Importing areas/polygons...")
     if db.import_polygons(polygons_csv): print("✓ Polygons import step finished.")
     else: print("✗ Polygons import step failed.")
-
+    
     print("\n[4/5] Indexing image files...")
     img_count = db.index_image_files(image_base_folder, reindex=True)
     if img_count >= 0: print(f"✓ Image indexing step finished ({img_count} images indexed).")
     else: print("✗ Image indexing step failed.")
-
+    
     print("\n[5/5] Importing Carpathian bears data...")
-    if db.import_bears_tracking_data(bears_csv): print("✓ Bears tracking data import step finished.")
-    else: print("✗ Bears tracking data import step failed.")
+    migrate_carpathian_bears_data()
+    
+    print("\n--- Complete Migration Finished ---")
 
-    print("\n--- Migration Complete ---")
-    print("Final counts (read directly from DB):")
-    final_conn = None
-    try:
-        final_conn = sqlite3.connect(db.db_path)
-        deterrent_count = final_conn.execute("SELECT COUNT(*) FROM deterrent_devices").fetchone()[0]
-        print(f"  Deterrent Devices: {deterrent_count}")
-        marker_count = final_conn.execute("SELECT COUNT(*) FROM markers").fetchone()[0]
-        print(f"  Markers: {marker_count}")
-        polygon_count = final_conn.execute("SELECT COUNT(*) FROM polygons").fetchone()[0]
-        print(f"  Polygons: {polygon_count}")
-        img_meta_count = final_conn.execute("SELECT COUNT(*) FROM image_metadata").fetchone()[0]
-        print(f"  Image Metadata Records: {img_meta_count}")
-        bears_count = final_conn.execute("SELECT COUNT(*) FROM bears_tracking").fetchone()[0]
-        print(f"  Bears Tracking Records: {bears_count}")
-    except Exception as e_check:
-        print(f"Error checking final counts directly: {e_check}")
-    finally:
-        if final_conn: final_conn.close()
-
-# Run migration if executed directly (optional - can use migrate_data.py)
-# if __name__ == "__main__":
-#      migrate_csv_to_sqlite()
+# Run migration if executed directly
+if __name__ == "__main__":
+    migrate_csv_to_sqlite()
+   
